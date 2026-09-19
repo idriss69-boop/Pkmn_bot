@@ -28,7 +28,19 @@ King Jouet - ETB 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/car
 # E.Leclerc - ETB 30 ans | https://...
 
 # Autres coffrets (Poster, Duo Pack Évoli, etc.) : même principe
-# Fnac - Coffret Poster 30 ans | https://...
+# King Jouet - Coffret Poster 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034914-pokemon-30-ans-coffret-poster.htm
+# King Jouet - Coffret Amphinobi ex 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034913-pokemon-30-ans-coffret-amphinobi-ex.htm
+# King Jouet - Coffret Nymphali ex 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034912-pokemon-30-ans-coffret-nymphali-ex.htm
+# King Jouet - Pack 2 boosters 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034909-pokemon-30-ans-pack-de-2-boosters.htm
+# King Jouet - One Piece OP17 booster | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034965-cartes-one-piece-booster-op17-les-guerriers-les-plus-puissants-au-monde.htm
+# King Jouet - One Piece OP17 double booster | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034966-cartes-one-piece-double-booster-op17-les-guerriers-les-plus-puissants-au-monde.htm
+# Joueclub - ETB 30 ans | https://www.joueclub.fr/pokemon/pokemon-30eme-anniversaire-coffret-dresseur-d-elite-0196214144835.html
+# Joueclub - Coffret Nymphali ex 30 ans | https://www.joueclub.fr/pokemon/pokemon-30eme-anniversaire-coffret-4-boosters-nymphali-ex-0196214147102.html
+Joueclub - One Piece OP17 booster blister | https://www.joueclub.fr/one-piece/one-piece-op17-booster-blister-les-guerriers-les-plus-puissants-du-monde-4582770058727.html
+Joueclub - One Piece OP17 double pack | https://www.joueclub.fr/one-piece/one-piece-op17-double-pack-les-guerriers-les-plus-puissants-du-monde-4582770058741.html
+# La Grande Recre - ETB 30 ans | https://www.lagranderecre.fr/jeux-de-societe/cartes-a-collectionner/coffret-dresseur-d-elite-pokemon-30e-anniversaire.html
+# La Grande Recre - Coffret Nymphali ex 30 ans | https://www.lagranderecre.fr/jeux-de-societe/cartes-a-collectionner/coffret-4-boosters-nymphali-ex-pokemon-30e-anniversaire.html
+# La Grande Recre - Coffret Amphinobi ex 30 ans | https://www.lagranderecre.fr/jeux-de-societe/cartes-a-collectionner/coffret-4-boosters-amphinobi-ex-pokemon-30e-anniversaire.html
 
 
 # ---------- ONE PIECE CARD GAME : OP-17 (sortie FR le 28/08/2026) ----------
