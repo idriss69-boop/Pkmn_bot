@@ -1,0 +1,33 @@
+# À placer dans le dépôt sous : .github/workflows/stock.yml
+name: Pokemon stock bot
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # toutes les 5 min (GitHub peut retarder)
+  workflow_dispatch:         # bouton "Run workflow" pour lancer à la main
+
+permissions:
+  contents: write            # pour sauvegarder stock_state.json
+
+concurrency:
+  group: stock-bot
+  cancel-in-progress: false  # jamais deux tours en même temps
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vérifier le stock
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 pokemon_stock_bot.py --once
+
+      - name: Sauvegarder l'état
+        run: |
+          git config user.name "stock-bot"
+          git config user.email "stock-bot@users.noreply.github.com"
+          git add stock_state.json
+          git diff --cached --quiet || (git commit -m "maj etat" && git push)
