@@ -21,9 +21,10 @@ Smyths Toys - ETB 30 ans | https://www.smythstoys.com/fr/fr-fr/jouets/jeux-de-so
 King Jouet - ETB 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034916-pokemon-30-ans-coffret-dresseur-d-elite.htm
 
 # A COMPLÉTER : ouvre la page du produit sur chaque site, copie l'URL, colle-la ici.
-# Fnac - ETB 30 ans | https://...
+# Fnac - coffret amphinobi ex 30 ans| https://www.fnac.com/Cartes-a-collectionner-Pokemon-30A-Coffret-Amphinobi-ex/a23200310/w-4?oref=00000000-0000-0000-0000-000000000000
 # Carrefour - ETB 30 ans | https://www.carrefour.fr/p/cartes-a-jouer-et-a-collectionner-coffret-dresseur-d-elite-30e-anniversaire-pokemon-0196214144835
 # Carrefour - Coffret Amphinobi ex 30 ans | https://www.carrefour.fr/p/coffret-pokemon-amphinobi-ex-30e-anniversaire-pokemon-0196214147164
+# Fnac - coffret poster 30 ans | https://www.fnac.com/Cartes-a-collectionner-Pokemon-30A-Coffret-Poster/a23200285/w-4#omnsearchpos=1
 
 # Autres coffrets (Poster, Duo Pack Évoli, etc.) : même principe
 # King Jouet - Coffret Poster 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034914-pokemon-30-ans-coffret-poster.htm
