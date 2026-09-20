@@ -1,4 +1,10 @@
 # À placer dans le dépôt sous : .github/workflows/stock.yml
+#
+# MODE NORMAL : une vérification toutes les ~5 min.
+# MODE RAPIDE : chaque tour vérifie toutes les ~30 s pendant ~4,5 min.
+#   Activation : Settings > Secrets and variables > Actions > onglet "Variables"
+#   > New repository variable : nom FAST_MODE, valeur on
+#   Désactivation : supprime la variable (ou mets une autre valeur que "on").
 name: Pokemon stock bot
 
 on:
@@ -16,18 +22,28 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
 
       - name: Vérifier le stock
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: python3 pokemon_stock_bot.py --once
+          FAST_MODE: ${{ vars.FAST_MODE }}
+        run: |
+          if [ "$FAST_MODE" = "on" ]; then
+            python3 pokemon_stock_bot.py --fast
+          else
+            python3 pokemon_stock_bot.py --once
+          fi
 
       - name: Sauvegarder l'état
+        if: always()
         run: |
           git config user.name "stock-bot"
           git config user.email "stock-bot@users.noreply.github.com"
           git add stock_state.json
-          git diff --cached --quiet || (git commit -m "maj etat" && git push)
+          if ! git diff --cached --quiet; then
+            git commit -m "maj etat"
+            git push || (git pull --rebase origin "$GITHUB_REF_NAME" && git push)
+          fi
