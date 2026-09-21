@@ -88,10 +88,10 @@
       "weak_hits": 0
     },
     "https://www.variantes.com/jcc-tcg-jeux-cartes-a-collectionner/60535-pokemon-etb-30-ans-0196214144835.html": {
-      "alerted": true,
+      "alerted": false,
       "problem_alerted": false,
       "problem_since": 0,
-      "status": "in",
+      "status": "out",
       "weak_hits": 0
     }
   }
