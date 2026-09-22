@@ -1,587 +1,605 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Pokemon / One Piece Stock Bot V4
-- Monitoring public product pages only
-- Adaptive per-product polling
-- Conservative stock detection
-- Price filtering to avoid overpriced listings
-- ntfy notifications
-- No automated cart / checkout
+Bot de surveillance Pokémon / One Piece TCG — V8 prix +10%.
 
-products.txt formats:
-    Coffret Pokémon X | https://example.com/product | 59.99
-    Coffret One Piece | https://example.com/product | 69,90
-    [10s] Produit prioritaire | https://example.com/product | 59.99
-    Produit sans plafond | https://example.com/product
+Format products.txt:
+    Nom | URL | prix_normal
 
-The third field is the MAXIMUM ACCEPTED PRICE in EUR.
-If PRICE_REQUIRED=True, an alert is sent only when a reliable price is found
-and is <= the configured maximum.
+Le bot applique automatiquement PRICE_TOLERANCE_PCT (10 % par défaut).
+Exemple : prix normal 59,99 € -> alerte seulement jusqu'à 65,99 €.
+
+Aucune commande ni achat automatique n'est effectué.
 """
-
-from __future__ import annotations
 
 import argparse
-import concurrent.futures
+import http.client
 import json
-import logging
 import os
 import random
 import re
-import threading
+import sys
 import time
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+import zlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
 from urllib.parse import urlparse
 
-import requests
+try:
+    import brotli
+    HAS_BROTLI = True
+except ImportError:
+    HAS_BROTLI = False
 
-# ---------------- Configuration ----------------
+# ---------------------------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------------------------
 
-PRODUCTS_FILE = os.getenv("PRODUCTS_FILE", "products.txt")
-STATE_FILE = os.getenv("STATE_FILE", "pokemon_stock_state_v4.json")
+NTFY_TOPIC = (os.environ.get("NTFY_TOPIC") or "CHANGE-MOI-pokestock-secret-123").strip()
+TOPIC_UNSET = NTFY_TOPIC.startswith("CHANGE-MOI")
 
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()
-NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+PRICE_FILTER_ENABLED = os.environ.get("PRICE_FILTER_ENABLED", "1") != "0"
+PRICE_REQUIRED = os.environ.get("PRICE_REQUIRED", "1") != "0"
+PRICE_TOLERANCE_PCT = float(os.environ.get("PRICE_TOLERANCE_PCT", "10"))
+ALERT_ON_PREORDER = os.environ.get("ALERT_ON_PREORDER", "1") != "0"
 
-CHECK_EVERY = float(os.getenv("CHECK_EVERY", "60"))
-FAST_INTERVAL = float(os.getenv("FAST_INTERVAL", "20"))
-MIN_INTERVAL = float(os.getenv("MIN_INTERVAL", "10"))
-MAX_INTERVAL = float(os.getenv("MAX_INTERVAL", "600"))
+# Scheduler adaptatif
+DEFAULT_INTERVAL = int(os.environ.get("DEFAULT_INTERVAL", "60"))
+PRIORITY_INTERVAL = int(os.environ.get("PRIORITY_INTERVAL", "20"))
+MIN_INTERVAL = int(os.environ.get("MIN_INTERVAL", "15"))
+MAX_INTERVAL = int(os.environ.get("MAX_INTERVAL", "900"))
+COOLDOWN_429 = int(os.environ.get("COOLDOWN_429", "120"))
+COOLDOWN_403 = int(os.environ.get("COOLDOWN_403", "300"))
 
-HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "8"))
-MAX_WORKERS_PER_DOMAIN = int(os.getenv("MAX_WORKERS_PER_DOMAIN", "4"))
+REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT", "15"))
+FETCH_RETRIES = int(os.environ.get("FETCH_RETRIES", "2"))
+MAX_PAGE_BYTES = int(os.environ.get("MAX_PAGE_BYTES", "3000000"))
+HOST_DELAY_MIN = float(os.environ.get("HOST_DELAY_MIN", "1.2"))
+HOST_DELAY_MAX = float(os.environ.get("HOST_DELAY_MAX", "3.0"))
+MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "6"))
+RUN_DEADLINE = int(os.environ.get("RUN_DEADLINE", "200"))
 
-PRICE_FILTER_ENABLED = os.getenv("PRICE_FILTER_ENABLED", "1") == "1"
-PRICE_REQUIRED = os.getenv("PRICE_REQUIRED", "1") == "1"
-PRICE_TOLERANCE_PCT = float(os.getenv("PRICE_TOLERANCE_PCT", "0"))
-DEFAULT_PRICE_MAX = float(os.getenv("DEFAULT_PRICE_MAX", "0"))
+WEAK_CONFIRMATIONS = int(os.environ.get("WEAK_CONFIRMATIONS", "2"))
+HEARTBEAT_EVERY_HOURS = int(os.environ.get("HEARTBEAT_EVERY_HOURS", "24"))
+PROBLEM_ALERT_MINUTES = int(os.environ.get("PROBLEM_ALERT_MINUTES", "30"))
+ALERT_COOLDOWN_HOURS = int(os.environ.get("ALERT_COOLDOWN_HOURS", "6"))
 
-# Once one acceptable listing is found, don't notify repeatedly for the same
-# product. Set STOP_AFTER_FIRST_ALERT=1 if you want the whole monitor to stop.
-FIRST_ACCEPTABLE_STOCK_ONLY = os.getenv("FIRST_ACCEPTABLE_STOCK_ONLY", "1") == "1"
-STOP_AFTER_FIRST_ALERT = os.getenv("STOP_AFTER_FIRST_ALERT", "0") == "1"
+BASE_DIR = Path(__file__).resolve().parent
+PRODUCTS_FILE = BASE_DIR / "products.txt"
+STATE_FILE = BASE_DIR / "stock_state.json"
 
-USER_AGENT = os.getenv(
-    "USER_AGENT",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131 Safari/537.36"
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/128.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+              "image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br" if HAS_BROTLI else "gzip, deflate",
+    "Sec-Ch-Ua": '"Chromium";v="128", "Not=A?Brand";v="24", "Google Chrome";v="128"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+TRANSIENT_HTTP = {408, 425, 429, 500, 502, 503, 504}
+
+# ---------------------------------------------------------------------------
+# STOCK DETECTION
+# ---------------------------------------------------------------------------
+
+IN_KEYS = {"instock", "limitedavailability", "onlineonly", "instoreonly",
+           "availablefororder", "true"}
+PRE_KEYS = {"preorder", "presale", "backorder"}
+OUT_KEYS = {"outofstock", "soldout", "discontinued", "oos", "false"}
+
+SCHEMA_RE = re.compile(
+    r'(?:schema\.org/|"availability"\s*:\s*")'
+    r"(InStock|LimitedAvailability|OnlineOnly|InStoreOnly|"
+    r"PreOrder|PreSale|BackOrder|OutOfStock|SoldOut|Discontinued)",
+    re.I,
+)
+OG_RES = [
+    re.compile(
+        r"""(?:product|og):availability["']\s+content=["']([^"']+)["']""",
+        re.I,
+    ),
+    re.compile(
+        r"""content=["']([^"']+)["']\s+(?:property|name)=["'](?:product|og):availability["']""",
+        re.I,
+    ),
+]
+LD_RE = re.compile(
+    r"""<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>""",
+    re.I | re.S,
+)
+NEXT_DATA_RE = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.I | re.S)
+
+OUT_WORDS = [
+    "épuisé", "epuise", "rupture de stock", "out of stock", "sold out",
+    "indisponible", "plus disponible", "victime de son succès",
+]
+IN_WORDS = [
+    "ajouter au panier", "add to cart", "ajouter à la commande",
+    "acheter maintenant", "commander",
+]
+PRE_WORDS = ["précommande", "precommande", "pre-order", "preorder"]
+BLOCK_WORDS = [
+    "captcha", "access denied", "just a moment", "datadome",
+    "verify you are human", "unusual traffic", "vérification de sécurité",
+    "robot check", "cf-chl",
+]
+
+def _norm(value) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).lower().rsplit("/", 1)[-1])
+
+def _walk(node):
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walk(value)
+
+def _is_product(node: dict) -> bool:
+    t = node.get("@type")
+    types = t if isinstance(t, list) else [t]
+    return any(
+        isinstance(x, str) and x.lower() in
+        ("product", "productgroup", "individualproduct")
+        for x in types
+    )
+
+def _ld_nodes(html: str):
+    for match in LD_RE.finditer(html):
+        try:
+            yield json.loads(match.group(1).strip())
+        except (ValueError, TypeError):
+            continue
+
+def _ld_availability(html: str) -> list:
+    for data in _ld_nodes(html):
+        for node in _walk(data):
+            if isinstance(node, dict) and _is_product(node):
+                keys = []
+                for sub in _walk([node.get("offers"), node.get("hasVariant")]):
+                    if isinstance(sub, dict) and isinstance(sub.get("availability"), str):
+                        keys.append(_norm(sub["availability"]))
+                if keys:
+                    return keys
+    return []
+
+def _next_data_availability(html: str) -> list:
+    match = NEXT_DATA_RE.search(html)
+    if not match:
+        return []
+    try:
+        data = json.loads(match.group(1))
+    except (ValueError, TypeError):
+        return []
+
+    results = []
+    for node in _walk(data):
+        if not isinstance(node, dict):
+            continue
+        if isinstance(node.get("inStock"), bool):
+            results.append("instock" if node["inStock"] else "outofstock")
+        elif isinstance(node.get("stockQuantity"), (int, float)):
+            results.append("instock" if node["stockQuantity"] > 0 else "outofstock")
+        elif isinstance(node.get("isAvailable"), bool):
+            results.append("instock" if node["isAvailable"] else "outofstock")
+        elif isinstance(node.get("availability"), str):
+            results.append(_norm(node["availability"]))
+    return results
+
+def _decide(keys):
+    kinds = set()
+    for key in keys:
+        if key in IN_KEYS:
+            kinds.add("in")
+        elif key in PRE_KEYS:
+            kinds.add("preorder")
+        elif key in OUT_KEYS:
+            kinds.add("out")
+    for status in ("in", "preorder", "out"):
+        if status in kinds:
+            return status, kinds
+    return None, kinds
+
+def classify(html: str):
+    status, _ = _decide(_ld_availability(html))
+    if status:
+        return status, "schema"
+
+    status, _ = _decide(_next_data_availability(html))
+    if status:
+        return status, "nextdata"
+
+    status, kinds = _decide([_norm(x) for x in SCHEMA_RE.findall(html)])
+    if status:
+        return status, "schema" if len(kinds) <= 1 else "keywords"
+
+    og = [_norm(x) for rx in OG_RES for x in rx.findall(html)]
+    status, _ = _decide(og)
+    if status:
+        return status, "meta"
+
+    low = html.lower()
+    if any(word in low for word in OUT_WORDS):
+        return "out", "keywords"
+
+    has_in = any(word in low for word in IN_WORDS)
+    if has_in and any(word in low for word in PRE_WORDS):
+        return "preorder", "keywords"
+    if has_in:
+        return "in", "keywords"
+
+    if any(word in low for word in BLOCK_WORDS):
+        return "blocked", "keywords"
+
+    return "unknown", "keywords"
+
+# ---------------------------------------------------------------------------
+# PRICE DETECTION
+# ---------------------------------------------------------------------------
+
+PRICE_RE = re.compile(
+    r"""(?<![\d.,])(\d{1,4}(?:[ .]\d{3})*(?:[,.]\d{1,2})?)\s*(?:€|EUR)\b""",
+    re.I,
+)
+PRICE_RE_REV = re.compile(
+    r"""(?:€|EUR)\s*(\d{1,4}(?:[ .]\d{3})*(?:[,.]\d{1,2})?)(?![\d.,])""",
+    re.I,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
-log = logging.getLogger("stockbot")
-
-session = requests.Session()
-session.headers.update({
-    "User-Agent": USER_AGENT,
-    "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.7",
-    "Cache-Control": "no-cache",
-})
-
-# ---------------- Models ----------------
-
-@dataclass
-class Product:
-    name: str
-    url: str
-    max_price: float = DEFAULT_PRICE_MAX
-    interval: float = CHECK_EVERY
-    priority: bool = False
-
-@dataclass
-class Result:
-    ok: bool
-    stock: bool = False
-    price: Optional[float] = None
-    price_source: str = ""
-    stock_source: str = ""
-    confidence: str = "unknown"
-    status: int = 0
-    error: str = ""
-    blocked: bool = False
-    elapsed: float = 0.0
-
-# ---------------- Helpers ----------------
-
-def now_ts() -> float:
-    return time.time()
-
-def iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-def parse_price(raw: Any) -> Optional[float]:
-    if raw is None:
+def parse_price(value):
+    if isinstance(value, (int, float)) and 0 < float(value) < 100000:
+        return round(float(value), 2)
+    if not isinstance(value, str):
         return None
-    s = str(raw).strip().replace("\xa0", " ")
+
+    s = value.strip().replace("\xa0", " ")
+    s = re.sub(r"\s+", " ", s)
+
+    # Formats français: 59,99 / 59.99 / 1 299,90
     s = re.sub(r"[^\d,.\s]", "", s).strip()
     if not s:
         return None
 
-    # French formats: 59,90 / 1 299,90 / 59.90
     if "," in s:
         s = s.replace(" ", "").replace(".", "").replace(",", ".")
     else:
         s = s.replace(" ", "")
-        # Avoid treating a thousands separator as decimal.
         if s.count(".") > 1:
             s = s.replace(".", "")
-        elif "." in s:
-            left, right = s.split(".", 1)
-            if len(right) == 3 and len(left) >= 1:
-                s = left + right
-
     try:
         value = float(s)
-        return value if value >= 0 else None
     except ValueError:
         return None
+    if not (0 < value < 100000):
+        return None
+    return round(value, 2)
 
-def normalize_max_price(value: float) -> float:
-    return max(0.0, float(value))
+def _collect_json_prices(html: str):
+    prices = []
 
-def effective_max_price(p: Product) -> float:
-    max_price = p.max_price if p.max_price > 0 else DEFAULT_PRICE_MAX
-    if max_price <= 0:
-        return 0.0
-    return max_price * (1 + PRICE_TOLERANCE_PCT / 100.0)
-
-def price_acceptable(p: Product, price: Optional[float]) -> bool:
-    if not PRICE_FILTER_ENABLED:
-        return True
-    max_price = effective_max_price(p)
-    if max_price <= 0:
-        return not PRICE_REQUIRED or price is not None
-    if price is None:
-        return not PRICE_REQUIRED
-    return price <= max_price + 1e-9
-
-def parse_products(path: str) -> list[Product]:
-    products: list[Product] = []
-    priority_re = re.compile(r"^\[(\d+(?:\.\d+)?)s\]\s*", re.I)
-
-    lines = Path(path).read_text(encoding="utf-8").splitlines()
-    for line_no, raw in enumerate(lines, 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-
-        interval = CHECK_EVERY
-        priority = False
-
-        m = priority_re.match(line)
-        if m:
-            interval = max(MIN_INTERVAL, float(m.group(1)))
-            priority = interval <= FAST_INTERVAL
-            line = line[m.end():]
-        elif line.startswith("🔥"):
-            priority = True
-            interval = FAST_INTERVAL
-            line = line[1:].strip()
-
-        parts = [x.strip() for x in line.split("|")]
-        if len(parts) < 2:
-            log.warning("Ligne %s ignorée: %s", line_no, raw)
-            continue
-
-        name, url = parts[0], parts[1]
-        max_price = DEFAULT_PRICE_MAX
-        if len(parts) >= 3 and parts[2]:
-            parsed = parse_price(parts[2])
-            if parsed is None:
-                log.warning("Prix max invalide ligne %s: %s", line_no, parts[2])
-            else:
-                max_price = parsed
-
-        products.append(Product(
-            name=name,
-            url=url,
-            max_price=normalize_max_price(max_price),
-            interval=max(MIN_INTERVAL, interval),
-            priority=priority,
-        ))
-    return products
-
-def load_state() -> dict[str, Any]:
-    path = Path(STATE_FILE)
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        log.warning("État illisible, réinitialisation: %s", exc)
-        return {}
-
-def save_state(state: dict[str, Any]) -> None:
-    path = Path(STATE_FILE)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
-
-# ---------------- Price extraction ----------------
-
-def iter_json_objects(obj: Any):
-    if isinstance(obj, dict):
-        yield obj
-        for value in obj.values():
-            yield from iter_json_objects(value)
-    elif isinstance(obj, list):
-        for value in obj:
-            yield from iter_json_objects(value)
-
-def extract_price_from_jsonld(html: str) -> tuple[Optional[float], str]:
-    scripts = re.findall(
-        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-        html, re.I | re.S
-    )
-    for script in scripts:
-        try:
-            obj = json.loads(script)
-        except Exception:
-            continue
-        for item in iter_json_objects(obj):
-            if str(item.get("@type", "")).lower() in {"product", "offer", "aggregateoffer"}:
+    for data in _ld_nodes(html):
+        for node in _walk(data):
+            if not isinstance(node, dict):
+                continue
+            if _is_product(node):
                 for key in ("price", "lowPrice", "highPrice"):
-                    price = parse_price(item.get(key))
-                    if price is not None and key != "highPrice":
-                        return price, f"jsonld:{key}"
-                offers = item.get("offers")
-                if offers:
-                    for offer in iter_json_objects(offers):
-                        price = parse_price(offer.get("price"))
-                        if price is not None:
-                            return price, "jsonld:offers.price"
-    return None, ""
+                    if key in node:
+                        p = parse_price(node[key])
+                        if p is not None:
+                            prices.append(p)
+            if "offers" in node and isinstance(node["offers"], (dict, list)):
+                for offer in _walk(node["offers"]):
+                    if isinstance(offer, dict):
+                        for key in ("price", "lowPrice"):
+                            if key in offer:
+                                p = parse_price(offer[key])
+                                if p is not None:
+                                    prices.append(p)
+    return prices
 
-def extract_price_from_next_data(html: str) -> tuple[Optional[float], str]:
-    m = re.search(
-        r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
-        html, re.I | re.S
-    )
-    if not m:
-        return None, ""
+def _collect_next_prices(html: str):
+    match = NEXT_DATA_RE.search(html)
+    if not match:
+        return []
     try:
-        obj = json.loads(m.group(1))
-    except Exception:
-        return None, ""
+        data = json.loads(match.group(1))
+    except (ValueError, TypeError):
+        return []
 
-    preferred = {"price", "currentPrice", "salePrice", "sellingPrice"}
-    for item in iter_json_objects(obj):
-        for key, value in item.items():
-            if str(key) in preferred:
-                price = parse_price(value)
-                if price is not None:
-                    return price, f"next:{key}"
-    return None, ""
+    prices = []
+    for node in _walk(data):
+        if not isinstance(node, dict):
+            continue
+        for key in ("price", "salePrice", "currentPrice", "sellingPrice"):
+            if key in node:
+                p = parse_price(node[key])
+                if p is not None:
+                    prices.append(p)
+    return prices
 
-def extract_price_from_meta(html: str) -> tuple[Optional[float], str]:
-    patterns = [
-        r'<meta[^>]+property=["\']product:price:amount["\'][^>]+content=["\']([^"\']+)',
-        r'<meta[^>]+name=["\']product:price:amount["\'][^>]+content=["\']([^"\']+)',
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, html, re.I)
-        if m:
-            price = parse_price(m.group(1))
-            if price is not None:
-                return price, "meta:product:price:amount"
-    return None, ""
+def extract_price(html: str):
+    prices = _collect_json_prices(html) + _collect_next_prices(html)
 
-def extract_price_from_visible_text(html: str) -> tuple[Optional[float], str]:
-    # Conservative fallback: only accept a unique price-like candidate.
+    # Meta tags et attributs de prix.
+    for pattern in (
+        r"""(?:product:price:amount|price)["']?\s*(?:content|value)=["']([^"']+)["']""",
+        r"""(?:content|value)=["']([^"']+)["']\s+(?:property|name)=["'](?:product:price:amount|price)["']""",
+    ):
+        for raw in re.findall(pattern, html, re.I):
+            p = parse_price(raw)
+            if p is not None:
+                prices.append(p)
+
+    # Repli texte, volontairement conservateur: seulement autour d'un symbole €.
     text = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.I | re.S)
     text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text)
+    for rx in (PRICE_RE, PRICE_RE_REV):
+        for raw in rx.findall(text):
+            p = parse_price(raw)
+            if p is not None:
+                prices.append(p)
 
-    matches = re.findall(
-        r"(?:prix|price)\s*(?:à partir de|from|de)?\s*:?\s*"
-        r"([0-9]{1,4}(?:[ .][0-9]{3})*(?:[,.][0-9]{2})?)\s*€",
-        text, re.I
+    if not prices:
+        return None
+
+    # Les prix les plus bas sont généralement le prix courant.
+    # On évite les montants manifestement accessoires.
+    prices = sorted(set(round(p, 2) for p in prices))
+    return prices[0]
+
+# ---------------------------------------------------------------------------
+# NETWORK
+# ---------------------------------------------------------------------------
+
+class FetchError(Exception):
+    def __init__(self, message, transient=False, status_code=None):
+        super().__init__(message)
+        self.transient = transient
+        self.status_code = status_code
+
+def _http_message(code: int) -> str:
+    messages = {
+        403: "HTTP 403 (accès refusé / protection anti-bot probable)",
+        404: "HTTP 404 (page introuvable)",
+        429: "HTTP 429 (trop de requêtes)",
+    }
+    return messages.get(code, f"HTTP {code}")
+
+def _fetch_once(url: str) -> str:
+    req = urllib.request.Request(url, headers=HEADERS)
+
+    proxy = (
+        os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or
+        os.environ.get("https_proxy") or os.environ.get("http_proxy")
     )
-    values = [parse_price(x) for x in matches]
-    values = [x for x in values if x is not None]
-    if len(values) == 1:
-        return values[0], "visible:price"
-    return None, ""
-
-def extract_price(html: str) -> tuple[Optional[float], str]:
-    for extractor in (
-        extract_price_from_jsonld,
-        extract_price_from_next_data,
-        extract_price_from_meta,
-        extract_price_from_visible_text,
-    ):
-        price, source = extractor(html)
-        if price is not None:
-            return price, source
-    return None, ""
-
-# ---------------- Stock detection ----------------
-
-OUT_WORDS = (
-    "rupture", "épuisé", "epuise", "indisponible", "out of stock",
-    "sold out", "non disponible", "bientôt disponible"
-)
-IN_WORDS = (
-    "ajouter au panier", "add to cart", "acheter", "buy now",
-    "en stock", "disponible", "available"
-)
-
-def detect_stock(html: str) -> tuple[bool, str, str]:
-    # JSON-LD is the strongest generic signal.
-    scripts = re.findall(
-        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-        html, re.I | re.S
-    )
-    for script in scripts:
-        try:
-            obj = json.loads(script)
-        except Exception:
-            continue
-        for item in iter_json_objects(obj):
-            availability = str(item.get("availability", "")).lower()
-            if "instock" in availability:
-                return True, "jsonld:InStock", "high"
-            if "outofstock" in availability or "soldout" in availability:
-                return False, "jsonld:OutOfStock", "high"
-
-    # Common page-data markers.
-    low = html.lower()
-    if any(x in low for x in ("outofstock", "out_of_stock", "sold-out")):
-        # Continue checking explicit positive CTA before deciding.
-        if not re.search(r"(ajouter\s+au\s+panier|add\s+to\s+cart|acheter)", low):
-            return False, "html:out-of-stock", "medium"
-
-    if re.search(r"(ajouter\s+au\s+panier|add\s+to\s+cart|acheter)", low):
-        return True, "html:cart-cta", "medium"
-
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = re.sub(r"\s+", " ", text).lower()
-    if any(x in text for x in IN_WORDS) and not any(x in text for x in OUT_WORDS):
-        return True, "text:availability", "low"
-
-    return False, "unknown", "unknown"
-
-def looks_blocked(status: int, html: str) -> bool:
-    low = html.lower()
-    markers = (
-        "captcha", "cloudflare", "access denied", "verify you are human",
-        "unusual traffic", "robot check", "challenge-platform"
-    )
-    return status in (403, 429, 503) or any(x in low for x in markers)
-
-# ---------------- HTTP check ----------------
-
-def check_product(p: Product) -> Result:
-    started = time.monotonic()
-    try:
-        response = session.get(
-            p.url,
-            timeout=(3.5, HTTP_TIMEOUT),
-            allow_redirects=True,
+    opener = (
+        urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
         )
-        elapsed = time.monotonic() - started
-        html = response.text
-        blocked = looks_blocked(response.status_code, html)
+        if proxy else urllib.request.build_opener()
+    )
 
-        if response.status_code != 200:
-            return Result(
-                ok=False, status=response.status_code,
-                error=f"HTTP {response.status_code}",
-                blocked=blocked, elapsed=elapsed,
+    try:
+        with opener.open(req, timeout=REQUEST_TIMEOUT) as response:
+            raw = response.read(MAX_PAGE_BYTES)
+            encoding = (response.headers.get("Content-Encoding") or "").lower()
+            charset = response.headers.get_content_charset() or "utf-8"
+    except urllib.error.HTTPError as exc:
+        raise FetchError(
+            _http_message(exc.code), exc.code in TRANSIENT_HTTP, exc.code
+        ) from exc
+
+    if encoding == "gzip":
+        raw = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw, MAX_PAGE_BYTES)
+    elif encoding == "deflate":
+        try:
+            raw = zlib.decompressobj().decompress(raw, MAX_PAGE_BYTES)
+        except zlib.error:
+            raw = zlib.decompressobj(-zlib.MAX_WBITS).decompress(raw, MAX_PAGE_BYTES)
+    elif encoding == "br":
+        if not HAS_BROTLI:
+            raise FetchError("page en Brotli mais module brotli absent")
+        raw = brotli.decompress(raw)
+    elif encoding not in ("", "identity"):
+        raise FetchError(f"encodage non géré: {encoding}")
+
+    try:
+        return raw.decode(charset, errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+def fetch(url: str):
+    last = None
+    for attempt in range(FETCH_RETRIES + 1):
+        try:
+            return _fetch_once(url)
+        except FetchError as exc:
+            last = exc
+        except (urllib.error.URLError, http.client.HTTPException, OSError,
+                zlib.error, EOFError) as exc:
+            last = FetchError(
+                f"réseau ({exc.__class__.__name__})", True
             )
 
-        stock, stock_source, confidence = detect_stock(html)
-        price, price_source = extract_price(html) if stock or PRICE_FILTER_ENABLED else (None, "")
+        if not last.transient or attempt >= FETCH_RETRIES:
+            raise last
+        time.sleep(1.5 * (attempt + 1) + random.random())
+    raise last
 
-        return Result(
-            ok=True,
-            stock=stock,
-            price=price,
-            price_source=price_source,
-            stock_source=stock_source,
-            confidence=confidence,
-            status=response.status_code,
-            blocked=blocked,
-            elapsed=elapsed,
-        )
-    except requests.RequestException as exc:
-        return Result(ok=False, error=str(exc), elapsed=time.monotonic() - started)
+# ---------------------------------------------------------------------------
+# NOTIFICATIONS
+# ---------------------------------------------------------------------------
 
-# ---------------- Notifications ----------------
+def _header(text: str, limit: int = 200) -> str:
+    return " ".join(str(text).split()).encode(
+        "latin-1", "replace"
+    ).decode("latin-1")[:limit]
 
-def notify(title: str, message: str, url: str) -> None:
-    if not NTFY_TOPIC:
-        log.info("NOTIFICATION | %s | %s | %s", title, message, url)
-        return
-
-    endpoint = f"{NTFY_SERVER}/{NTFY_TOPIC}"
-    try:
-        r = session.post(
-            endpoint,
-            data=message.encode("utf-8"),
-            headers={
-                "Title": title,
-                "Priority": "max",
-                "Click": url,
-                "Tags": "package",
-            },
-            timeout=8,
-        )
-        r.raise_for_status()
-    except requests.RequestException as exc:
-        log.warning("Notification ntfy échouée: %s", exc)
-
-# ---------------- Adaptive scheduler ----------------
-
-def domain(url: str) -> str:
-    return urlparse(url).netloc.lower()
-
-def initial_state(product: Product) -> dict[str, Any]:
-    return {
-        "last_stock": False,
-        "last_price": None,
-        "last_check": 0,
-        "next_check": 0,
-        "error_count": 0,
-        "cooldown_until": 0,
-        "last_http_status": 0,
-        "first_acceptable_alerted": False,
-    }
-
-def schedule_next(s: dict[str, Any], p: Product, result: Result) -> None:
-    base = p.interval
-    if result.status == 429:
-        delay = 120.0
-    elif result.status == 403 or result.blocked:
-        delay = 300.0
-    elif not result.ok:
-        errors = min(8, int(s.get("error_count", 0)))
-        delay = min(MAX_INTERVAL, base * (2 ** errors))
-    elif result.stock and price_acceptable(p, result.price):
-        delay = min(FAST_INTERVAL, base)
-    else:
-        delay = base
-
-    jitter = random.uniform(0, max(1.0, delay * 0.10))
-    s["next_check"] = now_ts() + delay + jitter
-
-# ---------------- Main loop ----------------
-
-def main_once(products: list[Product], state: dict[str, Any]) -> bool:
-    stop_requested = False
-
-    groups: dict[str, list[Product]] = {}
-    for p in products:
-        groups.setdefault(domain(p.url), []).append(p)
-
-    due: list[Product] = []
-    now = now_ts()
-    for p in products:
-        key = p.url
-        s = state.setdefault(key, initial_state(p))
-        if s.get("next_check", 0) <= now and s.get("cooldown_until", 0) <= now:
-            due.append(p)
-
-    if not due:
+def notify(title: str, message: str, url: str = "", priority: str = "5",
+           tags: str = "rotating_light") -> bool:
+    if TOPIC_UNSET:
+        print("  ! NTFY_TOPIC non configuré.")
         return False
 
-    def worker(p: Product):
-        return p, check_product(p)
+    endpoint = "https://ntfy.sh/" + urllib.parse.quote(NTFY_TOPIC, safe="")
+    headers = {
+        "Title": _header(title),
+        "Priority": str(priority),
+        "Tags": tags,
+    }
+    if url:
+        headers["Click"] = url
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS_PER_DOMAIN * max(1, len(groups))) as pool:
-        futures = [pool.submit(worker, p) for p in due]
-        for fut in concurrent.futures.as_completed(futures):
-            p, result = fut.result()
-            s = state.setdefault(p.url, initial_state(p))
-            previous_stock = bool(s.get("last_stock", False))
-            previous_price = s.get("last_price")
-            s["last_check"] = now_ts()
-            s["last_http_status"] = result.status
+    data = str(message)[:1800].encode("utf-8")
 
-            if not result.ok:
-                s["error_count"] = int(s.get("error_count", 0)) + 1
-            else:
-                s["error_count"] = 0
-
-            if result.status == 429:
-                s["cooldown_until"] = now_ts() + 120
-            elif result.status == 403 or result.blocked:
-                s["cooldown_until"] = now_ts() + 300
-            else:
-                s["cooldown_until"] = 0
-
-            acceptable = result.stock and price_acceptable(p, result.price)
-
-            # Important: stock without an acceptable/known price is NOT an alert.
-            if result.stock and PRICE_FILTER_ENABLED and not acceptable:
-                if result.price is None:
-                    log.info("%s | stock détecté mais prix inconnu -> aucune alerte", p.name)
-                else:
-                    log.info(
-                        "%s | stock à %.2f € > plafond %.2f € -> aucune alerte",
-                        p.name, result.price, effective_max_price(p)
-                    )
-
-            should_alert = (
-                acceptable
-                and not s.get("first_acceptable_alerted", False)
-                and (not previous_stock or not previous_price or
-                     (result.price is not None and result.price != previous_price))
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                endpoint, data=data, headers=headers, method="POST"
             )
+            urllib.request.urlopen(req, timeout=15).read()
+            print("  -> notification envoyée")
+            return True
+        except Exception as exc:
+            if attempt == 2:
+                print(f"  ! notification échouée: {exc}")
+            else:
+                time.sleep(1.5 * (attempt + 1))
+    return False
 
-            if should_alert:
-                s["first_acceptable_alerted"] = True
-                max_price = effective_max_price(p)
-                price_text = f"{result.price:.2f} €" if result.price is not None else "prix accepté"
-                limit_text = f" (plafond {max_price:.2f} €)" if max_price > 0 else ""
-                notify(
-                    f"🎯 Stock OK: {p.name}",
-                    f"{p.name}\nPrix: {price_text}{limit_text}\n"
-                    f"Confiance stock: {result.confidence}\n"
-                    f"Détection: {result.stock_source}\n"
-                    f"Prix via: {result.price_source or 'n/a'}\n"
-                    f"Détecté: {iso_now()}",
-                    p.url,
-                )
-                log.info("ALERTE ACCEPTABLE | %s | %.2f €", p.name, result.price or -1)
-                if STOP_AFTER_FIRST_ALERT:
-                    stop_requested = True
+# ---------------------------------------------------------------------------
+# PRODUCTS.TXT
+# ---------------------------------------------------------------------------
 
-            # Allow a new alert after the product has returned to unavailable state,
-            # but FIRST_ACCEPTABLE_STOCK_ONLY prevents repeated alerts for the same
-            # first acceptable discovery.
-            s["last_stock"] = result.stock
-            s["last_price"] = result.price
-            s["last_stock_source"] = result.stock_source
-            s["last_price_source"] = result.price_source
-            s["last_confidence"] = result.confidence
-            s["last_error"] = result.error
-            schedule_next(s, p, result)
+LINE_RE = re.compile(
+    r"^(.+?)\s*\|\s*(https?://\S+)\s*\|\s*([0-9]+(?:[.,][0-9]{1,2})?)\s*$"
+)
 
-    save_state(state)
-    return stop_requested
+def load_products():
+    try:
+        text = PRODUCTS_FILE.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        raise RuntimeError("products.txt est introuvable à côté du script.")
+    except OSError as exc:
+        raise RuntimeError(f"products.txt illisible: {exc}")
 
-def run(products: list[Product], state: dict[str, Any], once: bool = False) -> None:
-    log.info(
-        "V4 lancé | %d produit(s) | filtre prix=%s | prix obligatoire=%s",
-        len(products), PRICE_FILTER_ENABLED, PRICE_REQUIRED
-    )
-    while True:
-        stop = main_once(products, state)
-        if stop:
-            log.info("STOP_AFTER_FIRST_ALERT activé.")
-            return
-        if once:
-            return
+    products = []
+    seen = set()
 
-        now = now_ts()
-        next_times = [
-            float(state.get(p.url, {}).get(
+    for line_no, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        match = LINE_RE.match(line)
+        if not match or "..." in match.group(2):
+            print(
+                f"! ligne {line_no} ignorée: format attendu "
+                "'Nom | URL | prix_normal'"
+            )
+            continue
+
+        name = match.group(1).strip()
+        url = match.group(2).strip()
+        reference_price = parse_price(match.group(3))
+
+        if reference_price is None:
+            print(f"! ligne {line_no} ignorée: prix invalide")
+            continue
+        if url in seen:
+            print(f"! doublon ignoré: {name}")
+            continue
+
+        seen.add(url)
+        products.append({
+            "name": name,
+            "url": url,
+            "reference_price": reference_price,
+        })
+
+    if not products:
+        raise RuntimeError("products.txt ne contient aucun produit valide.")
+    return products
+
+# ---------------------------------------------------------------------------
+# STATE
+# ---------------------------------------------------------------------------
+
+def new_entry():
+    return {
+        "status": None,
+        "alerted": False,
+        "weak_hits": 0,
+        "problem_since": 0,
+        "problem_alerted": False,
+        "next_check": 0,
+        "cooldown_until": 0,
+        "last_http_status": None,
+        "errors": 0,
+        "last_price": None,
+    }
+
+def new_state():
+    return {
+        "products": {},
+        "last_heartbeat": 0,
+        "last_crash_alert": 0,
+        "last_config_alert": 0,
+    }
+
+def load_state():
+    state = new_state()
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("format inattendu")
+    except FileNotFoundError:
+        return state
+    except Exception as exc:
+        print(f"! état illisible ({exc}); nouveau state.")
+        return state
+
+    for key in ("last_heartbeat", "last_crash_alert", "last_config_alert"):
+        if isinstance(data.get(key), (int, float)):
+            state[key] = data[key]
+
+    if isinstance(data.get("products"), dict):
+        for url, old in data["products"].items():
+            entry = new_entry()
+            if isinstance(old, dict):
+                entry.update({k: old[k] for k in entry if k in old})
+            state["products"][str(url)] = entry
+
+    return state
+
+def save_state(state):
+    try:
+        payload = json.dumps(
+            state, indent=2, ensure_ascii=False, sort_keys=True
+        ) + "\n"
+        tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, STATE_FILE)
+    except Exception as exc:
+        print(f"! écriture state impossible: {exc}")
+
+# -----------------------------
