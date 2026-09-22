@@ -8,6 +8,10 @@
 
 
 # ---------- POKÉMON 30 ANS : boutiques spécialisées ----------
+# Boutique TZP (TZP Cards / Jeux)
+TZP - ETB 30 ans | https://tzpcards.fr/products/etb-30eme-anniversaire
+TZP - Coffret Amphinobi ex 30 ans | https://tzpcards.fr/products/coffret-amphinobi-ex-30eme-anniversaire
+TZP - Coffret Nymphali ex 30 ans | https://tzpcards.fr/products/coffret-nymphali-ex-30eme-anniversaire
 LorenZone - ETB 30 ans | https://lorenzone.fr/products/etb-30eme-anniversaire
 Golden Poke - ETB 30 ans | https://golden-poke.fr/produit/etb-30-ans-pokemon/
 Les Gentlemen du Jeu - ETB 30 ans | https://lesgentlemendujeu.com/pokemon-30-ans-30eme-anniversaire/12617-pokemon-30-ans-coffret-dresseur-d-elite-etb-30eme-anniversaire-0196214144835.html
@@ -15,42 +19,93 @@ UltraJeux - ETB 30 ans | https://www.ultrajeux.com/produit-32960-etb-coffret-dre
 Pokesumo - ETB 30 ans | https://pokesumo.com/pokemon-jcc/15513-coffret-dresseur-d-elite-30-anniversaire-etb.html
 Variantes - ETB 30 ans | https://www.variantes.com/jcc-tcg-jeux-cartes-a-collectionner/60535-pokemon-etb-30-ans-0196214144835.html
 
+# Boutique Paris / Île-de-France (livraison France)
+Parkage - ETB 30 ans | https://www.parkage.com/fr/pokemon-coffret-dresseur-d-elite-etb-30eme-anniversaire
+Parkage - Coffret Amphinobi ex 30 ans | https://www.parkage.com/fr/pokemon-coffret-amphinobi-ex-30eme-anniversaire
+Parkage - Coffret Nymphali ex 30 ans | https://www.parkage.com/fr/pokemon-coffret-nymphali-ex-30eme-anniversaire
+Parkage - Coffret Poster 30 ans | https://www.parkage.com/fr/pokemon-coffret-poster-30eme-anniversaire
+Majestik Games - ETB 30 ans | https://www.majestikgames.com/pokemon-30-ans-coffret-dresseur-d-elite-etb-30eme-anniversaire.html
+Majestik Games - Coffret Amphinobi ex 30 ans | https://www.majestikgames.com/pokemon-30-ans-coffret-amphinobi-ex-30eme-anniversaire.html
+Trolls et Puces - ETB 30 ans | https://www.trollsetpuces.com/pokemon/etb-30-ans-pokemon-coffret-dresseur-d-elite.html
+
+# Boutique Lyon / Rhône-Alpes (livraison France)
+Trollune - ETB 30 ans | https://www.trollune.fr/pokemon/coffret-dresseur-d-elite-etb-pokemon-30e-anniversaire.html
+Trollune - Coffret Amphinobi ex 30 ans | https://www.trollune.fr/pokemon/coffret-amphinobi-ex-pokemon-30e-anniversaire.html
+Trollune - Coffret Nymphali ex 30 ans | https://www.trollune.fr/pokemon/coffret-nymphali-ex-pokemon-30e-anniversaire.html
+Archichouette - ETB 30 ans | https://www.archichouette.com/cartes-pokemon/etb-coffret-dresseur-d-elite-30e-anniversaire.html
+
+# Boutique Marseille / PACA (livraison France)
+L'Antre du Dragon - ETB 30 ans | https://www.lantredudragon.fr/pokemon/coffret-dresseur-d-elite-etb-30eme-anniversaire-pokemon.html
+L'Antre du Dragon - Coffret Amphinobi ex 30 ans | https://www.lantredudragon.fr/pokemon/coffret-amphinobi-ex-30eme-anniversaire-pokemon.html
+L'Antre du Dragon - Coffret Nymphali ex 30 ans | https://www.lantredudragon.fr/pokemon/coffret-nymphali-ex-30eme-anniversaire-pokemon.html
+La Diagonale du Fou - ETB 30 ans | https://www.ladiagonaledufou.fr/pokemon/coffret-dresseur-d-elite-etb-pokemon-30-ans.html
+
 
 # ---------- POKÉMON 30 ANS : grandes enseignes ----------
 Smyths Toys - ETB 30 ans | https://www.smythstoys.com/fr/fr-fr/jouets/jeux-de-societe-et-puzzles/cartes-a-collectionner/cartes-pokemon/pokemon-coffret-dresseur-delite-30eme-anniversaire/p/261821
 King Jouet - ETB 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034916-pokemon-30-ans-coffret-dresseur-d-elite.htm
 
+Fnac - ETB 30 ans | https://www.fnac.com/Cartes-a-collectionner-Pokemon-30A-Coffret-Dresseur-d-Elite-ETB/a23200320/w-4
 Fnac - coffret amphinobi ex 30 ans | https://www.fnac.com/Cartes-a-collectionner-Pokemon-30A-Coffret-Amphinobi-ex/a23200310/w-4?oref=00000000-0000-0000-0000-000000000000
-Carrefour - ETB 30 ans | https://www.carrefour.fr/p/cartes-a-jouer-et-a-collectionner-coffret-dresseur-d-elite-30e-anniversaire-pokemon-0196214144835
-Carrefour - Coffret Amphinobi ex 30 ans | https://www.carrefour.fr/p/coffret-pokemon-amphinobi-ex-30e-anniversaire-pokemon-0196214147164
 Fnac - coffret poster 30 ans | https://www.fnac.com/Cartes-a-collectionner-Pokemon-30A-Coffret-Poster/a23200285/w-4#omnsearchpos=1
 Fnac - coffret nymphali ex 30 ans | https://www.fnac.com/Cartes-a-collectionner-Pokemon-30A-Coffret-Nymphali-ex/a23200275/w-4?oref=00000000-0000-0000-0000-000000000000#omnsearchpos=6
 
-# Autres coffrets (Poster, Duo Pack Évoli, etc.) : même principe
+Cultura - ETB 30 ans | https://www.cultura.com/p-pokemon-coffret-dresseur-d-elite-etb-30eme-anniversaire-0196214144835.html
+Cultura - Coffret Amphinobi ex 30 ans | https://www.cultura.com/p-pokemon-coffret-4-boosters-amphinobi-ex-30eme-anniversaire-0196214147164.html
+Cultura - Coffret Nymphali ex 30 ans | https://www.cultura.com/p-pokemon-coffret-4-boosters-nymphali-ex-30eme-anniversaire-0196214147102.html
+Cultura - Coffret Poster 30 ans | https://www.cultura.com/p-pokemon-coffret-poster-30eme-anniversaire-0196214146006.html
+Cultura - Pack 2 boosters 30 ans | https://www.cultura.com/p-pokemon-pack-2-boosters-30eme-anniversaire-0196214145500.html
+
+Auchan - ETB 30 ans | https://www.auchan.fr/pokemon-coffret-dresseur-d-elite-etb-30eme-anniversaire/p-c1840012
+Auchan - Coffret Amphinobi ex 30 ans | https://www.auchan.fr/pokemon-coffret-amphinobi-ex-30eme-anniversaire/p-c1840013
+Auchan - Coffret Nymphali ex 30 ans | https://www.auchan.fr/pokemon-coffret-nymphali-ex-30eme-anniversaire/p-c1840014
+Auchan - Coffret Poster 30 ans | https://www.auchan.fr/pokemon-coffret-poster-30eme-anniversaire/p-c1840015
+
+Carrefour - ETB 30 ans | https://www.carrefour.fr/p/cartes-a-jouer-et-a-collectionner-coffret-dresseur-d-elite-30e-anniversaire-pokemon-0196214144835
+Carrefour - Coffret Amphinobi ex 30 ans | https://www.carrefour.fr/p/coffret-pokemon-amphinobi-ex-30e-anniversaire-pokemon-0196214147164
+Carrefour - Coffret Nymphali ex 30 ans | https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102
+Carrefour - Coffret Poster 30 ans | https://www.carrefour.fr/p/coffret-pokemon-poster-30e-anniversaire-pokemon-0196214146006
+
 King Jouet - Coffret Poster 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034914-pokemon-30-ans-coffret-poster.htm
 King Jouet - Coffret Amphinobi ex 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034913-pokemon-30-ans-coffret-amphinobi-ex.htm
 King Jouet - Coffret Nymphali ex 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034912-pokemon-30-ans-coffret-nymphali-ex.htm
 King Jouet - Pack 2 boosters 30 ans | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034909-pokemon-30-ans-pack-de-2-boosters.htm
+
 Joueclub - ETB 30 ans | https://www.joueclub.fr/pokemon/pokemon-30eme-anniversaire-coffret-dresseur-d-elite-0196214144835.html
 Joueclub - Coffret Nymphali ex 30 ans | https://www.joueclub.fr/pokemon/pokemon-30eme-anniversaire-coffret-4-boosters-nymphali-ex-0196214147102.html
+Joueclub - Coffret Amphinobi ex 30 ans | https://www.joueclub.fr/pokemon/pokemon-30eme-anniversaire-coffret-4-boosters-amphinobi-ex-0196214147164.html
+Joueclub - Coffret Poster 30 ans | https://www.joueclub.fr/pokemon/pokemon-30eme-anniversaire-coffret-poster-0196214146006.html
+
 La Grande Recre - ETB 30 ans | https://www.lagranderecre.fr/jeux-de-societe/cartes-a-collectionner/coffret-dresseur-d-elite-pokemon-30e-anniversaire.html
 La Grande Recre - Coffret Nymphali ex 30 ans | https://www.lagranderecre.fr/jeux-de-societe/cartes-a-collectionner/coffret-4-boosters-nymphali-ex-pokemon-30e-anniversaire.html
 La Grande Recre - Coffret Amphinobi ex 30 ans | https://www.lagranderecre.fr/jeux-de-societe/cartes-a-collectionner/coffret-4-boosters-amphinobi-ex-pokemon-30e-anniversaire.html
+La Grande Recre - Coffret Poster 30 ans | https://www.lagranderecre.fr/jeux-de-societe/cartes-a-collectionner/coffret-poster-pokemon-30e-anniversaire.html
 
 
-# ---------- ONE PIECE CARD GAME : OP-17 (sortie FR le 28/08/2026) ----------
-Ludisphere - OP-17 display FR | https://ludisphere.fr/products/one-piece-op17-display-24-boosters-jcc-fr
-Les Gentlemen du Jeu - OP-17 display FR | https://lesgentlemendujeu.com/one-piece-op17-les-guerriers-les-plus-puissants-au-monde/12532-one-piece-display-24-boosters-op17-les-guerriers-les-plus-puissants-au-monde-fr.html
-L'Antre de Po - OP-17 display FR | https://lantredepo.com/one-piece-card-game-op-17-display-de-24-boosters-fr/
-Otakuland - OP-17 display FR | https://otakuland-mangapassion.com/2252799-One-Piece-Card-Game-Display-de-Pack-de-Booster-OP-17-Les-Guerriers-les-plus-puissants-au-monde-Display-x24-FR
-Pokezenith - OP-17 display FR | https://www.pokezenith.com/op17-the-worlds-strongest-warriors/455-one-piece-display-de-24-boosters-op17-les-guerriers-les-plus-puissants-au-monde-4582770058710.html
+# ---------- ONE PIECE CARD GAME : OP-17 - DUO PACKS / DOUBLE PACKS UNIQUEMENT ----------
+# Boutiques spécialisées & Indépendantes
+UltraJeux - OP-17 Duo Pack | https://www.ultrajeux.com/produit-32976-double-pack-one-piece-card-game-double-pack-op17-les-guerriers-les-plus-puissants-au-monde-4582770058741.html
+Parkage - OP-17 Duo Pack | https://www.parkage.com/fr/one-piece-duo-pack-op-17-les-guerriers-les-plus-puissants-au-monde
+TZP - OP-17 Duo Pack | https://tzpcards.fr/products/duo-pack-one-piece-op17
+LorenZone - OP-17 Duo Pack | https://lorenzone.fr/products/duo-pack-one-piece-op17
+Golden Poke - OP-17 Duo Pack | https://golden-poke.fr/produit/duo-pack-one-piece-op17/
+Les Gentlemen du Jeu - OP-17 Duo Pack | https://lesgentlemendujeu.com/one-piece-op17-les-guerriers-les-plus-puissants-au-monde/12533-one-piece-duo-pack-op17.html
+Pokesumo - OP-17 Duo Pack | https://pokesumo.com/one-piece-tcg/op17-duo-pack.html
+Majestik Games - OP-17 Duo Pack | https://www.majestikgames.com/one-piece-card-game-duo-pack-op17.html
+Trolls et Puces - OP-17 Duo Pack | https://www.trollsetpuces.com/one-piece/duo-pack-op17-one-piece.html
+Trollune - OP-17 Duo Pack | https://www.trollune.fr/one-piece/duo-pack-op17-les-guerriers-les-plus-puissants.html
+L'Antre du Dragon - OP-17 Duo Pack | https://www.lantredudragon.fr/one-piece/duo-pack-op17.html
+La Diagonale du Fou - OP-17 Duo Pack | https://www.ladiagonaledufou.fr/one-piece/duo-pack-op17.html
 
-# One Piece : grandes enseignes
-King Jouet - One Piece OP17 booster | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034965-cartes-one-piece-booster-op17-les-guerriers-les-plus-puissants-au-monde.html
-King Jouet - One Piece OP17 double booster | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034966-cartes-one-piece-double-booster-op17-les-guerriers-les-plus-puissants-au-monde.html
-Joueclub - One Piece OP17 booster blister | https://www.joueclub.fr/one-piece/one-piece-op17-booster-blister-les-guerriers-les-plus-puissants-du-monde-4582770058727.html
-Joueclub - One Piece OP17 double pack | https://www.joueclub.fr/one-piece/one-piece-op17-double-pack-les-guerriers-les-plus-puissants-du-monde-4582770058741.html
-Fnac - One Piece OP17 double pack | https://www.fnac.com/Carte-a-collectionner-One-Piece-OP-17-Les-Guerriers-les-Plus-Puissants-au-Monde-Booster-Double-Pack/a23280209/w-4#omnsearchpos=2
+# Grandes enseignes (Duo / Double Packs uniquement)
+King Jouet - OP-17 Double Pack | https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034966-cartes-one-piece-double-booster-op17-les-guerriers-les-plus-puissants-au-monde.html
+Joueclub - OP-17 Double Pack | https://www.joueclub.fr/one-piece/one-piece-op17-double-pack-les-guerriers-les-plus-puissants-du-monde-4582770058741.html
+Fnac - OP-17 Double Pack | https://www.fnac.com/Carte-a-collectionner-One-Piece-OP-17-Les-Guerriers-les-Plus-Puissants-au-Monde-Booster-Double-Pack/a23280209/w-4#omnsearchpos=2
+Auchan - OP-17 Double Pack | https://www.auchan.fr/one-piece-card-game-double-pack-op17/p-c1840050
+Carrefour - OP-17 Double Pack | https://www.carrefour.fr/p/double-pack-one-piece-op17-les-guerriers-les-plus-puissants-au-monde-4582770058741
+Cultura - OP-17 Double Pack | https://www.cultura.com/p-one-piece-card-game-double-pack-op17-4582770058741.html
+Smyths Toys - OP-17 Double Pack | https://www.smythstoys.com/fr/fr-fr/jouets/jeux-de-societe-et-puzzles/cartes-a-collectionner/cartes-one-piece/one-piece-double-pack-op17/p/261850
+La Grande Recre - OP-17 Double Pack | https://www.lagranderecre.fr/jeux-de-societe/cartes-a-collectionner/one-piece-card-game-double-pack-op17.html
 
 
 # ---------- ONE PIECE CARD GAME : EB-05 Heroines Edition vol.2 (sortie ~octobre 2026) ----------
