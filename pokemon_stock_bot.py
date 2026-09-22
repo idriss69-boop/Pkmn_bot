@@ -29,11 +29,19 @@ UTILISATION
   python3 pokemon_stock_bot.py --fast    MODE RAPIDE : vérifie toutes les ~30 s pendant
                                          ~4,5 min (un tour de GitHub Actions)
   python3 pokemon_stock_bot.py           boucle continue (PC, Termux)
-  python3 pokemon_stock_bot.py --test    envoie une notification de test
+  python3 pokemon_stock_bot.py --test    envoie une notification de test (tous canaux)
 
 MODE RAPIDE sur GitHub : Settings > Secrets and variables > Actions > onglet Variables >
 New repository variable : nom FAST_MODE, valeur on. Supprime-la (ou mets off) pour
 revenir au mode normal. Réserve-le aux jours de sortie.
+
+NOTIFICATIONS MULTI-CANAL : en plus du secret NTFY_TOPIC, tu peux ajouter deux secrets
+GitHub optionnels pour recevoir les alertes aussi sur Telegram (utile si ntfy.sh a un
+coup de mou pile le jour où ça compte) :
+  TELEGRAM_BOT_TOKEN   token du bot (via @BotFather)
+  TELEGRAM_CHAT_ID     ID de ton chat (via @userinfobot par exemple)
+Si ces deux secrets ne sont pas définis, le bot continue de fonctionner avec ntfy
+seul, comme avant.
 
 Produits : dans products.txt, une ligne = "Nom | URL de la page du produit".
 """
@@ -64,6 +72,11 @@ from urllib.parse import urlparse
 # à la ligne parfois collés par erreur avec le secret.
 NTFY_TOPIC = (os.environ.get("NTFY_TOPIC") or "CHANGE-MOI-pokestock-secret-123").strip()
 TOPIC_UNSET = NTFY_TOPIC.startswith("CHANGE-MOI")
+
+# Canal Telegram (optionnel, en plus de ntfy) : les deux secrets doivent être définis
+# pour que Telegram soit utilisé. Sinon le bot continue avec ntfy seul.
+TELEGRAM_BOT_TOKEN = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+TELEGRAM_CHAT_ID = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
 
 CHECK_EVERY = 180            # secondes entre deux tours (boucle continue uniquement)
 FAST_DURATION = 270          # mode rapide : durée d'un tour GitHub (secondes)
@@ -316,12 +329,9 @@ def retailer_actions(url: str):
     return actions, tip
 
 
-def notify(title: str, message: str, url: str = "", priority: str = "5",
-           tags: str = "rotating_light", actions=None) -> bool:
+def _notify_ntfy(title: str, message: str, url: str = "", priority: str = "5",
+                  tags: str = "rotating_light", actions=None) -> bool:
     """Envoie une notif ntfy (3 essais). Retourne True seulement si elle est partie."""
-    if TOPIC_UNSET:
-        print("  ! NTFY_TOPIC n'est pas configuré : notification non envoyée.")
-        return False
     endpoint = "https://ntfy.sh/" + urllib.parse.quote(NTFY_TOPIC, safe="")
     headers = {"Title": _header(title), "Priority": str(priority), "Tags": tags}
     if url:
@@ -337,14 +347,76 @@ def notify(title: str, message: str, url: str = "", priority: str = "5",
         try:
             req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
             urllib.request.urlopen(req, timeout=15).read()
-            print("  -> notification envoyée")
+            print("  -> notification ntfy envoyée")
             return True
         except Exception as e:  # noqa: BLE001
             error = e
             if attempt < 2:
                 time.sleep(2 * (attempt + 1))
-    print(f"  ! échec de la notification, nouvel essai au prochain tour : {error}")
+    print(f"  ! échec de la notification ntfy, nouvel essai au prochain tour : {error}")
     return False
+
+
+def _notify_telegram(title: str, message: str, url: str = "", actions=None) -> bool:
+    """Envoie une notif Telegram (3 essais) avec boutons liens si fournis.
+    Ne fait qu'ouvrir des liens : aucune action n'est déclenchée côté site marchand."""
+    endpoint = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    text = f"{title}\n\n{message}"[:4000]
+    buttons = [[{"text": label, "url": u}] for label, u in (actions or [])
+               if u.startswith(("http://", "https://"))]
+    if not buttons and url:
+        buttons = [[{"text": "Ouvrir la page", "url": url}]]
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "disable_web_page_preview": False}
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+    data = json.dumps(payload).encode("utf-8")
+
+    error = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(endpoint, data=data,
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=15) as r:
+                resp = json.loads(r.read().decode("utf-8"))
+            if resp.get("ok"):
+                print("  -> notification Telegram envoyée")
+                return True
+            error = resp.get("description", "réponse Telegram invalide")
+        except Exception as e:  # noqa: BLE001
+            error = e
+        if attempt < 2:
+            time.sleep(2 * (attempt + 1))
+    print(f"  ! échec de la notification Telegram, nouvel essai au prochain tour : {error}")
+    return False
+
+
+def notify(title: str, message: str, url: str = "", priority: str = "5",
+           tags: str = "rotating_light", actions=None) -> bool:
+    """Envoie la notif sur tous les canaux configurés (ntfy + Telegram si les deux
+    secrets sont réglés). Un canal en panne ne bloque pas l'autre.
+    Retourne True si AU MOINS UN canal est parti (pour marquer l'alerte comme envoyée)."""
+    channels = []
+    if TOPIC_UNSET:
+        print("  ! NTFY_TOPIC n'est pas configuré : ntfy sauté.")
+    else:
+        channels.append(("ntfy", lambda: _notify_ntfy(title, message, url, priority, tags, actions)))
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        channels.append(("telegram", lambda: _notify_telegram(title, message, url, actions)))
+
+    if not channels:
+        print("  ! Aucun canal de notification configuré (ni NTFY_TOPIC, ni Telegram).")
+        return False
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(channels)) as ex:
+        futures = {ex.submit(fn): name for name, fn in channels}
+        for fut, name in futures.items():
+            try:
+                results[name] = fut.result()
+            except Exception as e:  # noqa: BLE001
+                print(f"  ! canal {name} : erreur interne ({e.__class__.__name__})")
+                results[name] = False
+    return any(results.values())
 
 
 # ----------------------------------------------------------------------------
@@ -408,277 +480,4 @@ def load_state() -> dict:
         if not isinstance(data, dict):
             raise ValueError("format inattendu")
     except FileNotFoundError:
-        return state
-    except Exception as e:  # noqa: BLE001
-        print(f"! stock_state.json illisible ({e.__class__.__name__}) : on repart de zéro.")
-        return state
-
-    for key in ("last_heartbeat", "last_crash_alert", "last_config_alert"):
-        if isinstance(data.get(key), (int, float)):
-            state[key] = data[key]
-    products = data.get("products")
-    if isinstance(products, dict):
-        for url, entry in products.items():
-            e = new_entry()
-            if isinstance(entry, dict):
-                for k in e:
-                    if k in entry:
-                        e[k] = entry[k]
-            try:
-                e["problem_since"] = float(e["problem_since"])
-                e["weak_hits"] = int(e["weak_hits"])
-            except (TypeError, ValueError):
-                e["problem_since"], e["weak_hits"] = 0, 0
-            e["alerted"] = bool(e["alerted"])
-            e["problem_alerted"] = bool(e["problem_alerted"])
-            state["products"][str(url)] = e
-    return state
-
-
-def save_state(state: dict) -> None:
-    """Écriture atomique, et seulement si le contenu a changé."""
-    try:
-        text = json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
-        try:
-            if STATE_FILE.read_text(encoding="utf-8") == text:
-                return
-        except OSError:
-            pass
-        tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, STATE_FILE)
-    except Exception as e:  # noqa: BLE001
-        print(f"! impossible d'écrire l'état : {e}")
-
-
-def alert_limited(state: dict, key: str, title: str, message: str) -> None:
-    """Alerte 'technique' au plus une fois toutes les ALERT_COOLDOWN_HOURS."""
-    if time.time() - state.get(key, 0) >= ALERT_COOLDOWN_HOURS * 3600:
-        if notify(title, message, priority="4", tags="warning"):
-            state[key] = time.time()
-
-
-# ----------------------------------------------------------------------------
-# TOUR DE VÉRIFICATION
-# ----------------------------------------------------------------------------
-
-def check_one(name: str, url: str) -> dict:
-    res = {"name": name, "url": url, "status": None, "source": None,
-           "error": None, "skipped": False}
-    try:
-        res["status"], res["source"] = classify(fetch(url))
-    except FetchError as e:
-        res["error"] = str(e)
-    except Exception as e:  # noqa: BLE001
-        res["error"] = f"erreur inattendue ({e.__class__.__name__}: {str(e)[:60]})"
-    return res
-
-
-def check_group(items: list, deadline: float) -> list:
-    """Vérifie les pages d'un même site, l'une après l'autre, avec pause."""
-    out = []
-    for i, (name, url) in enumerate(items):
-        if time.monotonic() > deadline:
-            out.append({"name": name, "url": url, "status": None, "source": None,
-                        "error": None, "skipped": True})
-            continue
-        if i:
-            time.sleep(random.uniform(*HOST_DELAY))
-        out.append(check_one(name, url))
-    return out
-
-
-def fetch_all(products: list, deadline: float) -> dict:
-    groups = {}
-    for name, url in products:
-        groups.setdefault(urlparse(url).netloc.lower(), []).append((name, url))
-    results = {}
-    with ThreadPoolExecutor(max_workers=max(1, min(MAX_WORKERS, len(groups)))) as ex:
-        futures = [(ex.submit(check_group, g, deadline), g) for g in groups.values()]
-        for fut, group in futures:
-            try:
-                for r in fut.result():
-                    results[r["url"]] = r
-            except Exception as e:  # noqa: BLE001
-                for name, url in group:
-                    results[url] = {"name": name, "url": url, "status": None, "source": None,
-                                    "error": f"erreur interne ({e.__class__.__name__})",
-                                    "skipped": False}
-    return results
-
-
-def run_once(state: dict, products: list) -> None:
-    started = time.monotonic()
-    print(f"\n[{datetime.now():%H:%M:%S}] Vérification de {len(products)} produit(s)...")
-    results = fetch_all(products, started + RUN_DEADLINE)
-
-    entries = state["products"]
-    current = {url for _, url in products}
-    for url in [u for u in entries if u not in current]:
-        del entries[url]  # produit retiré de products.txt
-
-    ok = available = failing = skipped = 0
-    problems, recovered = [], []
-
-    for name, url in products:
-        res = results[url]
-        entry = entries.setdefault(url, new_entry())
-
-        if res["skipped"]:
-            skipped += 1
-            print(f"- {name}: ignoré (temps du tour dépassé)")
-            continue
-
-        status, source, err = res["status"], res["source"], res["error"]
-        if not err and status == "unknown":
-            err = "page illisible (structure du site changée ?)"
-        if not err and status == "blocked":
-            err = "page de vérification / protection anti-bot"
-
-        if err:
-            failing += 1
-            now = time.time()
-            if not entry["problem_since"]:
-                entry["problem_since"] = now
-            minutes = (now - entry["problem_since"]) / 60
-            print(f"- {name}: {err} [depuis {minutes:.0f} min]")
-            if minutes >= PROBLEM_ALERT_MINUTES and not entry["problem_alerted"]:
-                problems.append((name, err, entry))
-            continue
-
-        # Lecture réussie
-        if entry["problem_alerted"]:
-            recovered.append(name)
-        entry["problem_since"] = 0
-        entry["problem_alerted"] = False
-        entry["status"] = status
-        ok += 1
-        label = {"in": "EN STOCK", "preorder": "PRÉCOMMANDE", "out": "épuisé"}[status]
-        print(f"- {name}: {label}" + (" (mots-clés)" if source == "keywords" else ""))
-
-        is_available = status == "in" or (status == "preorder" and ALERT_ON_PREORDER)
-        if not is_available:
-            entry["alerted"] = False   # ré-armé pour le prochain restock
-            entry["weak_hits"] = 0
-            continue
-
-        available += 1
-        if entry["alerted"]:
-            continue
-        if source == "keywords":
-            entry["weak_hits"] += 1
-            if entry["weak_hits"] < WEAK_CONFIRMATIONS:
-                print("  ... détection peu fiable : à confirmer au prochain tour")
-                continue
-
-        kind = "Stock dispo" if status == "in" else "Précommande ouverte"
-        note = "\n(détection par mots-clés : vérifie la page)" if source == "keywords" else ""
-        # "alerted" n'est validé que si la notif est bien partie -> sinon réessai
-        actions, tip = retailer_actions(url)
-        if notify(f"{kind} : {name}", f"{name}\n{url}{note}{tip}", url, actions=actions):
-            entry["alerted"] = True
-
-    if problems:
-        lines = "\n".join(f"- {n} : {why}" for n, why, _ in problems)
-        if notify("Bot Pokémon : site en difficulté",
-                  f"Ces pages ne sont plus lues correctement :\n{lines}\n"
-                  "Tu risques de rater du stock dessus : vérifie à la main.",
-                  priority="4", tags="warning"):
-            for _, _, entry in problems:
-                entry["problem_alerted"] = True
-
-    if recovered:
-        notify("Bot Pokémon : sites de nouveau lisibles",
-               "\n".join(f"- {n}" for n in recovered), priority="2", tags="white_check_mark")
-
-    if HEARTBEAT_EVERY_HOURS > 0 and \
-            time.time() - state.get("last_heartbeat", 0) >= HEARTBEAT_EVERY_HOURS * 3600:
-        msg = (f"Le bot tourne. {ok}/{len(products)} pages lues correctement, "
-               f"{available} disponible(s), {failing} en difficulté.")
-        if notify("Bot Pokémon : OK", msg, priority="2", tags="white_check_mark"):
-            state["last_heartbeat"] = time.time()
-
-    save_state(state)
-    print(f"Terminé en {time.monotonic() - started:.0f}s : {ok} OK, {failing} en difficulté, "
-          f"{available} disponible(s)" + (f", {skipped} ignoré(s)" if skipped else "") + ".")
-
-
-def safe_cycle(state: dict) -> None:
-    """Un tour complet qui ne plante jamais : tout problème devient une alerte ntfy."""
-    try:
-        products = load_products()
-    except ConfigError as e:
-        print(f"! {e}")
-        alert_limited(state, "last_config_alert", "Bot Pokémon : products.txt invalide", str(e))
-        save_state(state)
-        return
-    try:
-        run_once(state, products)
-    except Exception:  # noqa: BLE001
-        trace = traceback.format_exc()
-        print(trace)
-        last_line = trace.strip().splitlines()[-1][:300]
-        alert_limited(state, "last_crash_alert", "Bot Pokémon : erreur interne", last_line)
-        save_state(state)
-
-
-def fast_loop(state: dict, duration: int, interval: int) -> None:
-    """Mode rapide : plusieurs vérifications dans un même tour GitHub Actions."""
-    interval = max(MIN_INTERVAL, interval)
-    started = time.monotonic()
-    end = started + duration
-    cycles = 0
-    while True:
-        cycle_start = time.monotonic()
-        safe_cycle(state)
-        cycles += 1
-        wait = max(5.0, interval + random.uniform(-4, 4) - (time.monotonic() - cycle_start))
-        if time.monotonic() + wait >= end:  # pas le temps d'un autre passage complet
-            break
-        time.sleep(wait)
-    print(f"\nMode rapide terminé : {cycles} vérification(s) en "
-          f"{time.monotonic() - started:.0f}s (toutes les ~{interval}s).")
-
-
-def main() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            pass
-
-    parser = argparse.ArgumentParser(description="Surveillance de stock Pokémon / One Piece")
-    parser.add_argument("--once", action="store_true", help="un seul tour puis quitte")
-    parser.add_argument("--fast", action="store_true",
-                        help="mode rapide : vérifie toutes les ~30 s pendant ~4,5 min")
-    parser.add_argument("--duration", type=int, default=FAST_DURATION,
-                        help="durée du mode rapide en secondes")
-    parser.add_argument("--interval", type=int, default=FAST_INTERVAL,
-                        help="secondes entre deux vérifications du mode rapide")
-    parser.add_argument("--test", action="store_true", help="envoie une notification de test")
-    args = parser.parse_args()
-
-    if args.test:
-        ok = notify("Test bot Pokemon", "Si tu vois ce message, les notifications marchent.",
-                    priority="3", tags="white_check_mark")
-        sys.exit(0 if ok else 1)
-
-    state = load_state()
-    if args.once:
-        safe_cycle(state)
-        return
-    if args.fast:
-        fast_loop(state, args.duration, args.interval)
-        return
-
-    print("Bot lancé. Ctrl+C pour arrêter.")
-    try:
-        while True:
-            safe_cycle(state)
-            time.sleep(CHECK_EVERY + random.uniform(0, 30))
-    except KeyboardInterrupt:
-        print("\nArrêt.")
-
-
-if __name__ == "__main__":
-    main()
+        return stat
