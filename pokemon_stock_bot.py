@@ -1,16 +1,27 @@
 #!/usr/bin/env python3
 """
-Bot de surveillance de stock Pokémon + One Piece TCG - VERSION AMÉLIORÉE & RENFORCÉE
+Bot de surveillance de stock PokÃ©mon / One Piece TCG - V2
 
-Corrections & Améliorations intégrées :
-- En-têtes HTTP ultra-réalistes (Sec-Ch-Ua, Sec-Fetch-*, Accept, etc.) pour éviter les blocages 403.
-- Décodage natif Brotli (br) avec fallback transparent si la bibliothèque n'est pas disponible.
-- Support natif des Proxies HTTP/HTTPS (via variables d'environnement HTTP_PROXY / HTTPS_PROXY).
-- Analyse avancée des frameworks modernes (Next.js __NEXT_DATA__ et Nuxt __NUXT__) pour Fnac, Leclerc, Carrefour, etc.
-- Amélioration de la résilience et de la compatibilité GitHub Actions.
+Objectif :
+- dÃ©tecter rapidement les changements de stock ;
+- limiter les faux positifs ;
+- notifier immÃ©diatement via ntfy ;
+- rester compatible avec le products.txt existant ;
+- ne pas automatiser le panier/checkout : l'achat reste manuel.
+
+Format products.txt :
+    Nom du produit | https://exemple.fr/produit
+
+Variables d'environnement utiles :
+    NTFY_TOPIC=...
+    CHECK_EVERY=120
+    FAST_INTERVAL=20
+    REQUEST_TIMEOUT=12
+    MAX_WORKERS=8
 """
 
 import argparse
+import gzip
 import http.client
 import json
 import os
@@ -23,516 +34,595 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-# Module brotli optionnel
 try:
     import brotli
     HAS_BROTLI = True
 except ImportError:
     HAS_BROTLI = False
 
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # CONFIG
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
-NTFY_TOPIC = (os.environ.get("NTFY_TOPIC") or "CHANGE-MOI-pokestock-secret-123").strip()
-TOPIC_UNSET = NTFY_TOPIC.startswith("CHANGE-MOI")
+def env_int(name, default, minimum=None):
+    try:
+        value = int(os.environ.get(name, default))
+        return max(minimum, value) if minimum is not None else value
+    except (TypeError, ValueError):
+        return default
 
-CHECK_EVERY = 180            # secondes entre deux tours (boucle continue)
-FAST_DURATION = 270          # mode rapide : durée d'un tour GitHub (secondes)
-FAST_INTERVAL = 30           # mode rapide : secondes entre deux vérifications
-MIN_INTERVAL = 20            # intervalle minimum
-ALERT_ON_PREORDER = True     # alerter aussi sur précommande
-HEARTBEAT_EVERY_HOURS = 24   # message de présence
-PROBLEM_ALERT_MINUTES = 30   # délai avant alerte d'échec continu
-WEAK_CONFIRMATIONS = 2       # lectures par mots-clés à confirmer
-ALERT_COOLDOWN_HOURS = 6     # délai entre alertes d'erreur interne
-
-REQUEST_TIMEOUT = 15         # secondes par requête
-FETCH_RETRIES = 2            # réessais sur erreur temporaire
-MAX_PAGE_BYTES = 3_000_000   # taille max lue par page
-HOST_DELAY = (1.5, 3.5)      # pause entre deux pages du MÊME site
-MAX_WORKERS = 6              # sites vérifiés en parallèle
-RUN_DEADLINE = 200           # secondes max par tour
+NTFY_TOPIC = (os.environ.get("NTFY_TOPIC") or "").strip()
+CHECK_EVERY = env_int("CHECK_EVERY", 120, 20)
+FAST_INTERVAL = env_int("FAST_INTERVAL", 20, 10)
+FAST_DURATION = env_int("FAST_DURATION", 300, 30)
+REQUEST_TIMEOUT = env_int("REQUEST_TIMEOUT", 12, 5)
+FETCH_RETRIES = env_int("FETCH_RETRIES", 2, 0)
+MAX_PAGE_BYTES = env_int("MAX_PAGE_BYTES", 3_500_000, 100_000)
+MAX_WORKERS = env_int("MAX_WORKERS", 8, 1)
+RUN_DEADLINE = env_int("RUN_DEADLINE", 180, 20)
+HOST_DELAY_MIN = float(os.environ.get("HOST_DELAY_MIN", "0.5"))
+HOST_DELAY_MAX = float(os.environ.get("HOST_DELAY_MAX", "1.5"))
+WEAK_CONFIRMATIONS = env_int("WEAK_CONFIRMATIONS", 2, 1)
+PROBLEM_ALERT_MINUTES = env_int("PROBLEM_ALERT_MINUTES", 20, 1)
+HEARTBEAT_EVERY_HOURS = env_int("HEARTBEAT_EVERY_HOURS", 24, 0)
+ALERT_COOLDOWN_HOURS = env_int("ALERT_COOLDOWN_HOURS", 6, 1)
+ALERT_ON_PREORDER = os.environ.get("ALERT_ON_PREORDER", "1").lower() not in {"0", "false", "no"}
 
 BASE_DIR = Path(__file__).resolve().parent
 PRODUCTS_FILE = BASE_DIR / "products.txt"
 STATE_FILE = BASE_DIR / "stock_state.json"
 
-# En-têtes HTTP de navigateur récent (Chrome 128+)
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/128.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br" if HAS_BROTLI else "gzip, deflate",
-    "Sec-Ch-Ua": '"Chromium";v="128", "Not=A?Brand";v="24", "Google Chrome";v="128"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
 }
 
 TRANSIENT_HTTP = {408, 425, 429, 500, 502, 503, 504}
 
-BIG_RETAILERS = ("carrefour.", "fnac.", "amazon.", "auchan.", "leclerc", "smythstoys.",
-                 "king-jouet.", "joueclub.", "lagranderecre.", "cultura.", "micromania.")
-AMAZON_ASIN_RE = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
+# DÃ©tection structurÃ©e : plus fiable que les mots-clÃ©s.
+IN_KEYS = {
+    "instock", "limitedavailability", "onlineonly", "instoreonly",
+    "availablefororder", "in_stock", "available"
+}
+PRE_KEYS = {"preorder", "presale", "backorder", "pre_order"}
+OUT_KEYS = {
+    "outofstock", "soldout", "discontinued", "oos", "out_of_stock",
+    "unavailable"
+}
 
-# ----------------------------------------------------------------------------
-# DÉTECTION DU STOCK
-# ----------------------------------------------------------------------------
-
-IN_KEYS = {"instock", "limitedavailability", "onlineonly", "instoreonly", "availablefororder", "true"}
-PRE_KEYS = {"preorder", "presale", "backorder"}
-OUT_KEYS = {"outofstock", "soldout", "discontinued", "oos", "false"}
-
-SCHEMA_RE = re.compile(
-    r'(?:schema\.org/|"availability"\s*:\s*")'
-    r"(InStock|LimitedAvailability|OnlineOnly|InStoreOnly|"
-    r"PreOrder|PreSale|BackOrder|OutOfStock|SoldOut|Discontinued)",
-    re.I,
-)
-OG_RES = [
-    re.compile(r'(?:product|og):availability["']\s+content=["']([^"']+)["']', re.I),
-    re.compile(r'content=["']([^"']+)["']\s+(?:property|name)=["'](?:product|og):availability["']', re.I),
-]
 LD_RE = re.compile(
-    r'<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>', re.I | re.S
+    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.I | re.S,
 )
-NEXT_DATA_RE = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.I | re.S)
+NEXT_DATA_RE = re.compile(
+    r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+    re.I | re.S,
+)
+NUXT_RE = re.compile(
+    r'<script[^>]+id=["\']__NUXT__["\'][^>]*>(.*?)</script>',
+    re.I | re.S,
+)
 
-OUT_WORDS = [
-    "épuisé", "epuise", "rupture de stock", "out of stock", "sold out",
-    "indisponible", "plus disponible", "victime de son succès",
+OG_RES = [
+    re.compile(
+        r'(?:product|og):availability["\']\s+content=["\']([^"\']+)["\']',
+        re.I,
+    ),
+    re.compile(
+        r'content=["\']([^"\']+)["\']\s+'
+        r'(?:property|name)=["\'](?:product|og):availability["\']',
+        re.I,
+    ),
 ]
-IN_WORDS = ["ajouter au panier", "add to cart", "ajouter à la commande", "acheter maintenant"]
-PRE_WORDS = ["précommande", "precommande", "pre-order", "preorder"]
-BLOCK_WORDS = [
-    "captcha", "access denied", "just a moment", "datadome", "verify you are human",
-    "unusual traffic", "vérification de sécurité", "robot check", "cf-chl",
-]
 
+OUT_WORDS = (
+    "Ã©puisÃ©", "epuise", "rupture de stock", "out of stock",
+    "sold out", "indisponible", "plus disponible",
+)
+IN_WORDS = (
+    "ajouter au panier", "add to cart", "ajouter Ã  la commande",
+    "acheter maintenant", "disponible", "en stock",
+)
+PRE_WORDS = ("prÃ©commande", "precommande", "pre-order", "preorder")
+BLOCK_WORDS = (
+    "captcha", "access denied", "just a moment", "datadome",
+    "verify you are human", "unusual traffic", "vÃ©rification de sÃ©curitÃ©",
+    "robot check", "cf-chl",
+)
 
-def _norm(value) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(value).lower().rsplit("/", 1)[-1])
-
-
-def _walk(node):
-    if isinstance(node, dict):
-        yield node
-        for v in node.values():
-            yield from _walk(v)
-    elif isinstance(node, list):
-        for v in node:
-            yield from _walk(v)
-
-
-def _is_product(node: dict) -> bool:
-    t = node.get("@type")
-    types = t if isinstance(t, list) else [t]
-    return any(isinstance(x, str) and x.lower() in ("product", "productgroup", "individualproduct")
-               for x in types)
-
-
-def _ld_availability(html: str) -> list:
-    for m in LD_RE.finditer(html):
-        try:
-            data = json.loads(m.group(1).strip())
-        except ValueError:
-            continue
-        for node in _walk(data):
-            if isinstance(node, dict) and _is_product(node):
-                keys = [
-                    _norm(sub["availability"])
-                    for sub in _walk([node.get("offers"), node.get("hasVariant")])
-                    if isinstance(sub, dict) and isinstance(sub.get("availability"), str)
-                ]
-                if keys:
-                    return keys
-    return []
-
-
-def _next_data_availability(html: str) -> list:
-    m = NEXT_DATA_RE.search(html)
-    if not m:
-        return []
-    try:
-        data = json.loads(m.group(1))
-        results = []
-        for node in _walk(data):
-            if isinstance(node, dict):
-                if "inStock" in node and isinstance(node["inStock"], bool):
-                    results.append("instock" if node["inStock"] else "outofstock")
-                elif "stockQuantity" in node and isinstance(node["stockQuantity"], (int, float)):
-                    results.append("instock" if node["stockQuantity"] > 0 else "outofstock")
-                elif "isAvailable" in node and isinstance(node["isAvailable"], bool):
-                    results.append("instock" if node["isAvailable"] else "outofstock")
-                elif "availability" in node and isinstance(node["availability"], str):
-                    results.append(_norm(node["availability"]))
-        return results
-    except Exception:
-        return []
-
-
-def _decide(keys):
-    kinds = set()
-    for k in keys:
-        if k in IN_KEYS:
-            kinds.add("in")
-        elif k in PRE_KEYS:
-            kinds.add("preorder")
-        elif k in OUT_KEYS:
-            kinds.add("out")
-    for status in ("in", "preorder", "out"):
-        if status in kinds:
-            return status, kinds
-    return None, kinds
-
-
-def classify(html: str):
-    """Retourne (statut, source).
-    statut : 'in' | 'preorder' | 'out' | 'blocked' | 'unknown'
-    source : 'schema' / 'meta' / 'nextdata' (fiable) ou 'keywords' (peu fiable)"""
-    # 1) JSON-LD du produit principal
-    status, _ = _decide(_ld_availability(html))
-    if status:
-        return status, "schema"
-
-    # 2) Frameworks modernes (Next.js __NEXT_DATA__)
-    status, _ = _decide(_next_data_availability(html))
-    if status:
-        return status, "nextdata"
-
-    # 3) Microdonnées / schema.org dans la page
-    status, kinds = _decide([_norm(m) for m in SCHEMA_RE.findall(html)])
-    if status:
-        return status, ("keywords" if len(kinds) > 1 else "schema")
-
-    # 4) Balise Open Graph
-    og = [_norm(m) for rx in OG_RES for m in rx.findall(html)]
-    status, _ = _decide(og)
-    if status:
-        return status, "meta"
-
-    # 5) Repli par mots-clés
-    low = html.lower()
-    if any(w in low for w in OUT_WORDS):
-        return "out", "keywords"
-    has_in = any(w in low for w in IN_WORDS)
-    if has_in and any(w in low for w in PRE_WORDS):
-        return "preorder", "keywords"
-    if has_in:
-        return "in", "keywords"
-    if any(w in low for w in BLOCK_WORDS):
-        return "blocked", "keywords"
-    return "unknown", "keywords"
-
-
-# ----------------------------------------------------------------------------
-# RÉSEAU & PROXIES
-# ----------------------------------------------------------------------------
-
-class FetchError(Exception):
-    def __init__(self, message, transient=False):
-        super().__init__(message)
-        self.transient = transient
-
-
-def _http_message(code: int) -> str:
-    if code == 403:
-        return "HTTP 403 (accès refusé : le site bloque probablement les bots / IP Datacenter)"
-    if code == 404:
-        return "HTTP 404 (page introuvable : le lien a peut-être changé)"
-    if code == 429:
-        return "HTTP 429 (trop de requêtes)"
-    return f"HTTP {code}"
-
-
-def _fetch_once(url: str) -> str:
-    req = urllib.request.Request(url, headers=HEADERS)
-    
-    # Prise en charge des Proxies via variables d'environnement (HTTP_PROXY / HTTPS_PROXY)
-    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy")
-    if proxy:
-        handler = urllib.request.ProxyHandler({'http': proxy, 'https': proxy})
-        opener = urllib.request.build_opener(handler)
-    else:
-        opener = urllib.request.build_opener()
-
-    with opener.open(req, timeout=REQUEST_TIMEOUT) as r:
-        raw = r.read(MAX_PAGE_BYTES)
-        enc = (r.headers.get("Content-Encoding") or "").lower()
-        charset = r.headers.get_content_charset() or "utf-8"
-
-    if enc == "gzip":
-        raw = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw, MAX_PAGE_BYTES)
-    elif enc == "deflate":
-        try:
-            raw = zlib.decompressobj().decompress(raw, MAX_PAGE_BYTES)
-        except zlib.error:
-            raw = zlib.decompressobj(-zlib.MAX_WBITS).decompress(raw, MAX_PAGE_BYTES)
-    elif enc == "br":
-        if HAS_BROTLI:
-            try:
-                raw = brotli.decompress(raw)
-            except Exception as e:
-                raise FetchError(f"erreur décompression brotli ({e})")
-        else:
-            raise FetchError("reçu encodage brotli (br) sans module brotli installé")
-    elif enc not in ("", "identity"):
-        raise FetchError(f"encodage de page non géré ({enc})")
-
-    try:
-        return raw.decode(charset, errors="replace")
-    except LookupError:
-        return raw.decode("utf-8", errors="replace")
-
-
-def fetch(url: str) -> str:
-    last = None
-    for attempt in range(FETCH_RETRIES + 1):
-        try:
-            return _fetch_once(url)
-        except urllib.error.HTTPError as e:
-            last = FetchError(_http_message(e.code), e.code in TRANSIENT_HTTP)
-        except FetchError as e:
-            last = e
-        except (urllib.error.URLError, http.client.HTTPException, OSError,
-                zlib.error, EOFError) as e:
-            last = FetchError(f"réseau ({e.__class__.__name__})", True)
-        if not last.transient or attempt == FETCH_RETRIES:
-            raise last
-        time.sleep(2 * (attempt + 1) + random.random())
-    raise last
-
-
-def _header(text: str, limit: int = 200) -> str:
-    return " ".join(str(text).split()).encode("latin-1", "replace").decode("latin-1")[:limit]
-
-
-def retailer_actions(url: str):
-    host = urlparse(url).netloc.lower()
-    if not any(k in host for k in BIG_RETAILERS):
-        return None, ""
-    actions = [("Ouvrir la page", url)]
-    if "amazon." in host:
-        m = AMAZON_ASIN_RE.search(url)
-        if m:
-            actions.append(("Ajouter au panier",
-                            f"https://{host}/gp/aws/cart/add.html?ASIN.1={m.group(1)}&Quantity.1=1"))
-    tip = "
-Grande enseigne : sois déjà connecté, ouvre la page et ajoute au panier tout de suite."
-    return actions, tip
-
-
-def notify(title: str, message: str, url: str = "", priority: str = "5",
-           tags: str = "rotating_light", actions=None) -> bool:
-    if TOPIC_UNSET:
-        print("  ! NTFY_TOPIC n'est pas configuré : notification non envoyée.")
-        return False
-    endpoint = "https://ntfy.sh/" + urllib.parse.quote(NTFY_TOPIC, safe="")
-    headers = {"Title": _header(title), "Priority": str(priority), "Tags": tags}
-    if url:
-        headers["Click"] = urllib.parse.quote(url, safe=":/?&=%#@+,;~!$*()[]")
-    if actions:
-        parts = [f"view, {label}, {u}" for label, u in actions if "," not in u and ";" not in u]
-        if parts:
-            headers["Actions"] = _header("; ".join(parts), 1500)
-    data = str(message)[:1500].encode("utf-8")
-
-    error = None
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
-            urllib.request.urlopen(req, timeout=15).read()
-            print("  -> notification envoyée")
-            return True
-        except Exception as e:
-            error = e
-            if attempt < 2:
-                time.sleep(2 * (attempt + 1))
-    print(f"  ! échec de la notification, nouvel essai au prochain tour : {error}")
-    return False
-
-
-# ----------------------------------------------------------------------------
-# PRODUITS
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# OUTILS
+# ---------------------------------------------------------------------------
 
 class ConfigError(Exception):
     pass
 
+
+class FetchError(Exception):
+    def __init__(self, message, transient=False, status_code=None):
+        super().__init__(message)
+        self.transient = transient
+        self.status_code = status_code
+
+
+def now_ts():
+    return time.time()
+
+
+def norm(value):
+    return re.sub(r"[^a-z0-9_]", "", str(value).lower().replace("-", "_"))
+
+
+def flatten(node):
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from flatten(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from flatten(value)
+
+
+def status_from_value(value):
+    value = norm(value)
+    if value in IN_KEYS or value.endswith("instock"):
+        return "in"
+    if value in PRE_KEYS or value.endswith("preorder"):
+        return "preorder"
+    if value in OUT_KEYS or value.endswith("outofstock"):
+        return "out"
+    return None
+
+
+def http_message(code):
+    messages = {
+        403: "HTTP 403 : accÃ¨s refusÃ© par le site",
+        404: "HTTP 404 : page introuvable",
+        429: "HTTP 429 : trop de requÃªtes",
+        500: "HTTP 500 : erreur serveur",
+        502: "HTTP 502 : passerelle",
+        503: "HTTP 503 : service indisponible",
+        504: "HTTP 504 : dÃ©lai serveur dÃ©passÃ©",
+    }
+    return messages.get(code, f"HTTP {code}")
+
+
+# ---------------------------------------------------------------------------
+# RÃ‰SEAU
+# ---------------------------------------------------------------------------
+
+def build_opener():
+    proxy = (
+        os.environ.get("HTTPS_PROXY")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("http_proxy")
+    )
+    if proxy:
+        return urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        )
+    return urllib.request.build_opener()
+
+
+OPENER = build_opener()
+
+
+def decode_body(raw, encoding):
+    enc = (encoding or "").lower().strip()
+    try:
+        if enc == "gzip":
+            return gzip.decompress(raw)
+        if enc == "deflate":
+            try:
+                return zlib.decompress(raw)
+            except zlib.error:
+                return zlib.decompress(raw, -zlib.MAX_WBITS)
+        if enc == "br":
+            if not HAS_BROTLI:
+                raise FetchError("page compressÃ©e en Brotli : installe le paquet 'brotli'")
+            return brotli.decompress(raw)
+        if enc not in ("", "identity"):
+            raise FetchError(f"encodage non gÃ©rÃ© : {enc}")
+        return raw
+    except FetchError:
+        raise
+    except Exception as exc:
+        raise FetchError(f"dÃ©compression impossible : {exc}")
+
+
+def fetch_once(url):
+    req = urllib.request.Request(url, headers=HEADERS, method="GET")
+    try:
+        with OPENER.open(req, timeout=REQUEST_TIMEOUT) as response:
+            raw = response.read(MAX_PAGE_BYTES + 1)
+            if len(raw) > MAX_PAGE_BYTES:
+                raise FetchError(f"page trop volumineuse (> {MAX_PAGE_BYTES} octets)")
+            content = decode_body(raw, response.headers.get("Content-Encoding"))
+            charset = response.headers.get_content_charset() or "utf-8"
+            return content.decode(charset, errors="replace"), response.headers
+    except urllib.error.HTTPError as exc:
+        raise FetchError(
+            http_message(exc.code),
+            transient=exc.code in TRANSIENT_HTTP,
+            status_code=exc.code,
+        )
+    except urllib.error.URLError as exc:
+        raise FetchError(f"rÃ©seau : {exc.reason}", transient=True)
+    except (http.client.HTTPException, TimeoutError, OSError) as exc:
+        raise FetchError(f"rÃ©seau : {exc.__class__.__name__}", transient=True)
+
+
+def fetch(url):
+    last = None
+    for attempt in range(FETCH_RETRIES + 1):
+        try:
+            return fetch_once(url)
+        except FetchError as exc:
+            last = exc
+            if not exc.transient or attempt >= FETCH_RETRIES:
+                raise
+            # Backoff exponentiel + jitter. Un 429 doit ralentir plutÃ´t que marteler.
+            delay = min(12, 1.5 * (2 ** attempt) + random.uniform(0, 1.0))
+            time.sleep(delay)
+    raise last
+
+
+# ---------------------------------------------------------------------------
+# DÃ‰TECTION
+# ---------------------------------------------------------------------------
+
+def parse_json_script(regex, html):
+    results = []
+    for match in regex.finditer(html):
+        raw = match.group(1).strip()
+        try:
+            results.append(json.loads(raw))
+        except (ValueError, TypeError):
+            continue
+    return results
+
+
+def structured_statuses(html):
+    statuses = []
+
+    for data in parse_json_script(LD_RE, html):
+        for node in flatten(data):
+            if not isinstance(node, dict):
+                continue
+            for key in ("availability", "availabilityStatus"):
+                value = node.get(key)
+                if isinstance(value, str):
+                    status = status_from_value(value)
+                    if status:
+                        statuses.append(("schema", status))
+
+            offers = node.get("offers")
+            if isinstance(offers, dict):
+                value = offers.get("availability")
+                if isinstance(value, str):
+                    status = status_from_value(value)
+                    if status:
+                        statuses.append(("schema", status))
+
+    for regex, source in ((NEXT_DATA_RE, "nextdata"), (NUXT_RE, "nuxt")):
+        for data in parse_json_script(regex, html):
+            for node in flatten(data):
+                if not isinstance(node, dict):
+                    continue
+
+                for key in ("availability", "availabilityStatus"):
+                    value = node.get(key)
+                    if isinstance(value, str):
+                        status = status_from_value(value)
+                        if status:
+                            statuses.append((source, status))
+
+                for key in ("inStock", "isAvailable", "available"):
+                    value = node.get(key)
+                    if isinstance(value, bool):
+                        statuses.append((source, "in" if value else "out"))
+
+                for key in ("stockQuantity", "quantity", "inventory"):
+                    value = node.get(key)
+                    if isinstance(value, (int, float)):
+                        statuses.append((source, "in" if value > 0 else "out"))
+
+    for rx in OG_RES:
+        for value in rx.findall(html):
+            status = status_from_value(value)
+            if status:
+                statuses.append(("meta", status))
+
+    return statuses
+
+
+def visible_text(html):
+    # On retire scripts/styles pour Ã©viter qu'un texte de debug ou une librairie
+    # contenant "add to cart" crÃ©e un faux positif.
+    text = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.I | re.S)
+    text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<noscript\b[^>]*>.*?</noscript>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).lower()
+
+
+def classify(html):
+    low = html.lower()
+
+    # Protection anti-bot : prioritÃ© Ã  la sÃ©curitÃ© pour Ã©viter de conclure
+    # "hors stock" ou "en stock" sur une page de challenge.
+    block_hits = sum(1 for word in BLOCK_WORDS if word in low)
+    if block_hits >= 2 or any(x in low for x in ("<title>access denied", "captcha-container")):
+        return "blocked", "protection", 0.99
+
+    structured = structured_statuses(html)
+
+    # On exige plusieurs signaux concordants pour les donnÃ©es faibles.
+    counts = {"in": 0, "preorder": 0, "out": 0}
+    strong = {"in": 0, "preorder": 0, "out": 0}
+
+    for source, status in structured:
+        counts[status] += 1
+        if source in {"schema", "meta"}:
+            strong[status] += 1
+
+    for status in ("in", "preorder", "out"):
+        if strong[status] >= 1:
+            return status, "schema", 0.98
+
+    # Plusieurs donnÃ©es structurÃ©es identiques : confirmation raisonnable.
+    ranked = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+    if ranked[0][1] >= 2 and ranked[0][1] > ranked[1][1]:
+        return ranked[0][0], "framework", 0.90
+
+    text = visible_text(html)
+
+    out_hits = sum(text.count(word) for word in OUT_WORDS)
+    in_hits = sum(text.count(word) for word in IN_WORDS)
+    pre_hits = sum(text.count(word) for word in PRE_WORDS)
+
+    # Une indication "hors stock" est prioritaire seulement si aucun signal
+    # d'achat fort n'est prÃ©sent.
+    if in_hits == 0 and out_hits > 0:
+        return "out", "keywords", 0.65
+
+    if in_hits > 0 and pre_hits > 0:
+        return "preorder", "keywords", 0.60
+
+    if in_hits > 0:
+        return "in", "keywords", 0.60
+
+    if out_hits > 0:
+        return "out", "keywords", 0.60
+
+    return "unknown", "none", 0.0
+
+
+# ---------------------------------------------------------------------------
+# PRODUITS / Ã‰TAT
+# ---------------------------------------------------------------------------
 
 LINE_RE = re.compile(r"^(.+?)\s*\|\s*(https?://\S+)\s*$")
 
 
 def load_products():
     try:
-        text = PRODUCTS_FILE.read_bytes().decode("utf-8-sig", errors="replace")
+        raw = PRODUCTS_FILE.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
-        raise ConfigError("products.txt est introuvable à côté du script.")
-    except OSError as e:
-        raise ConfigError(f"products.txt est illisible ({e.__class__.__name__}).")
+        raise ConfigError("products.txt est introuvable Ã  cÃ´tÃ© du script.")
+    except OSError as exc:
+        raise ConfigError(f"products.txt illisible : {exc}")
 
-    products, seen = [], set()
-    for n, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
+    products = []
+    seen = set()
+
+    for number, line in enumerate(raw.splitlines(), 1):
+        line = line.strip()
         if not line or line.startswith("#"):
             continue
-        m = LINE_RE.match(line)
-        if not m or "..." in m.group(2):
-            print(f"! products.txt ligne {n} ignorée (format 'Nom | URL' attendu) : {line[:60]}")
+
+        match = LINE_RE.match(line)
+        if not match:
+            print(f"! products.txt ligne {number} ignorÃ©e : format 'Nom | URL' attendu")
             continue
-        name, url = m.group(1).strip(), m.group(2).strip()
+
+        name, url = match.group(1).strip(), match.group(2).strip()
         if url in seen:
-            print(f"! products.txt ligne {n} ignorée (doublon) : {name}")
             continue
+
         seen.add(url)
         products.append((name, url))
+
     if not products:
         raise ConfigError("products.txt ne contient aucun produit valide.")
+
     return products
 
 
-# ----------------------------------------------------------------------------
-# ÉTAT (mémoire du bot)
-# ----------------------------------------------------------------------------
+def new_entry():
+    return {
+        "status": None,
+        "alerted": False,
+        "weak_hits": 0,
+        "problem_since": 0.0,
+        "problem_alerted": False,
+        "last_check": 0.0,
+        "last_source": "",
+        "last_confidence": 0.0,
+        "last_error": "",
+        "consecutive_errors": 0,
+    }
 
-def new_entry() -> dict:
-    return {"status": None, "alerted": False, "problem_since": 0,
-            "problem_alerted": False, "weak_hits": 0}
+
+def new_state():
+    return {
+        "version": 2,
+        "products": {},
+        "last_heartbeat": 0.0,
+        "last_crash_alert": 0.0,
+        "last_config_alert": 0.0,
+    }
 
 
-def new_state() -> dict:
-    return {"products": {}, "last_heartbeat": 0,
-            "last_crash_alert": 0, "last_config_alert": 0}
-
-
-def load_state() -> dict:
+def load_state():
     state = new_state()
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("format inattendu")
     except FileNotFoundError:
         return state
-    except Exception as e:
-        print(f"! stock_state.json illisible ({e.__class__.__name__}) : on repart de zéro.")
+    except Exception as exc:
+        print(f"! Ã©tat illisible ({exc.__class__.__name__}), remise Ã  zÃ©ro.")
+        return state
+
+    if not isinstance(data, dict):
         return state
 
     for key in ("last_heartbeat", "last_crash_alert", "last_config_alert"):
         if isinstance(data.get(key), (int, float)):
-            state[key] = data[key]
+            state[key] = float(data[key])
+
     products = data.get("products")
     if isinstance(products, dict):
-        for url, entry in products.items():
-            e = new_entry()
-            if isinstance(entry, dict):
-                for k in e:
-                    if k in entry:
-                        e[k] = entry[k]
+        for url, old in products.items():
+            entry = new_entry()
+            if isinstance(old, dict):
+                for key in entry:
+                    if key in old:
+                        entry[key] = old[key]
             try:
-                e["problem_since"] = float(e["problem_since"])
-                e["weak_hits"] = int(e["weak_hits"])
+                entry["weak_hits"] = int(entry["weak_hits"])
+                entry["consecutive_errors"] = int(entry["consecutive_errors"])
+                entry["problem_since"] = float(entry["problem_since"])
+                entry["last_check"] = float(entry["last_check"])
             except (TypeError, ValueError):
-                e["problem_since"], e["weak_hits"] = 0, 0
-            e["alerted"] = bool(e["alerted"])
-            e["problem_alerted"] = bool(e["problem_alerted"])
-            state["products"][str(url)] = e
+                entry = new_entry()
+            state["products"][str(url)] = entry
+
     return state
 
 
-def save_state(state: dict) -> None:
+def save_state(state):
     try:
-        text = json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True) + "
-"
-        try:
-            if STATE_FILE.read_text(encoding="utf-8") == text:
-                return
-        except OSError:
-            pass
-        tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
+        payload = json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(payload, encoding="utf-8")
         os.replace(tmp, STATE_FILE)
-    except Exception as e:
-        print(f"! impossible d'écrire l'état : {e}")
+    except Exception as exc:
+        print(f"! impossible d'Ã©crire l'Ã©tat : {exc}")
 
 
-def alert_limited(state: dict, key: str, title: str, message: str) -> None:
-    if time.time() - state.get(key, 0) >= ALERT_COOLDOWN_HOURS * 3600:
-        if notify(title, message, priority="4", tags="warning"):
-            state[key] = time.time()
+# ---------------------------------------------------------------------------
+# NOTIFICATIONS
+# ---------------------------------------------------------------------------
 
+def notify(title, message, url="", priority="5", tags="rotating_light"):
+    if not NTFY_TOPIC:
+        print("  ! NTFY_TOPIC n'est pas configurÃ©.")
+        return False
 
-# ----------------------------------------------------------------------------
-# TOUR DE VÉRIFICATION
-# ----------------------------------------------------------------------------
+    endpoint = "https://ntfy.sh/" + urllib.parse.quote(NTFY_TOPIC, safe="")
+    headers = {
+        "Title": title[:200],
+        "Priority": str(priority),
+        "Tags": tags,
+    }
+    if url:
+        headers["Click"] = url
 
-def check_one(name: str, url: str) -> dict:
-    res = {"name": name, "url": url, "status": None, "source": None,
-           "error": None, "skipped": False}
+    request = urllib.request.Request(
+        endpoint,
+        data=message[:3500].encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+
     try:
-        res["status"], res["source"] = classify(fetch(url))
-    except FetchError as e:
-        res["error"] = str(e)
-    except Exception as e:
-        res["error"] = f"erreur inattendue ({e.__class__.__name__}: {str(e)[:60]})"
-    return res
+        with urllib.request.urlopen(request, timeout=10) as response:
+            response.read()
+        print("  -> notification envoyÃ©e")
+        return True
+    except Exception as exc:
+        print(f"  ! notification impossible : {exc}")
+        return False
 
 
-def check_group(items: list, deadline: float) -> list:
-    out = []
-    for i, (name, url) in enumerate(items):
-        if time.monotonic() > deadline:
-            out.append({"name": name, "url": url, "status": None, "source": None,
-                        "error": None, "skipped": True})
-            continue
-        if i:
-            time.sleep(random.uniform(*HOST_DELAY))
-        out.append(check_one(name, url))
-    return out
+def alert_limited(state, key, title, message):
+    if now_ts() - state.get(key, 0) >= ALERT_COOLDOWN_HOURS * 3600:
+        if notify(title, message, priority="4", tags="warning"):
+            state[key] = now_ts()
 
 
-def fetch_all(products: list, deadline: float) -> dict:
+# ---------------------------------------------------------------------------
+# VÃ‰RIFICATION
+# ---------------------------------------------------------------------------
+
+def check_one(name, url):
+    result = {
+        "name": name,
+        "url": url,
+        "status": None,
+        "source": None,
+        "confidence": 0.0,
+        "error": None,
+        "http_status": None,
+    }
+
+    try:
+        html, headers = fetch(url)
+        status, source, confidence = classify(html)
+        result.update(status=status, source=source, confidence=confidence)
+        return result
+    except FetchError as exc:
+        result["error"] = str(exc)
+        result["http_status"] = exc.status_code
+        return result
+    except Exception as exc:
+        result["error"] = f"{exc.__class__.__name__}: {str(exc)[:100]}"
+        return result
+
+
+def fetch_all(products, deadline):
+    # Un thread par domaine : plusieurs boutiques sont surveillÃ©es en parallÃ¨le,
+    # mais on Ã©vite de marteler le mÃªme domaine avec plusieurs threads.
     groups = {}
     for name, url in products:
-        groups.setdefault(urlparse(url).netloc.lower(), []).append((name, url))
+        host = urlparse(url).netloc.lower()
+        groups.setdefault(host, []).append((name, url))
+
     results = {}
-    with ThreadPoolExecutor(max_workers=max(1, min(MAX_WORKERS, len(groups)))) as ex:
-        futures = [(ex.submit(check_group, g, deadline), g) for g in groups.values()]
-        for fut, group in futures:
-            try:
-                for r in fut.result():
-                    results[r["url"]] = r
-            except Exception as e:
-                for name, url in group:
-                    results[url] = {"name": name, "url": url, "status": None, "source": None,
-                                    "error": f"erreur interne ({e.__class__.__name__})",
-                                    "skipped": False}
-    return results
 
+    def group_worker(items):
+        local = []
+        for index, item in enumerate(items):
+            if time.monotonic() >= deadline:
+                name, url = item
+                local.append({
+                    "name": name, "url": url, "status": None, "source": None,
+                    "confidence": 0.0, "error": "tour terminÃ©", "http_status": None,
+                    "skipped": True,
+                })
+                continue
 
-def run_once(state: dict, products: list) -> None:
-    started = time.monotonic()
-    print(f"
-[{datetime.now():%H:%M:%S}] Vérification de {len(products)} produit(s)...")
-    results = fetch_all(products, started + RUN_DEADLINE)
+            if index:
+                time.sleep(random.uniform(HOST_DELAY_MIN, HOST_DELAY_MAX))
 
-    entries = state["products"]
-    current = {url for _, url in products}
-    for url in [u for u in entries if u not in current]:
-        del entries[url]
+            local.append(check_one(*item))
+        return local
 
-    ok = available = failing = skipped = 0
-    problems, recovered = [], []
-
-    for name, url in products:
-        res = results[url]
-        entry = entr
+    worker_count = min(MAX_WORKERS, max(1, len(groups
