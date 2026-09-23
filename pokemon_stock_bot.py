@@ -670,10 +670,12 @@ def _physical_status_from_html(html: str, retailer: str = "") -> tuple[str | Non
     explicit_in = (
         "en stock en magasin", "stock en magasin", "disponible en magasin",
         "disponible dans votre magasin", "disponible dans ce magasin",
-        "disponible dans le magasin", "en rayon", "retrait 1h en magasin",
-        "retrait 1h gratuit", "retrait sous 2h", "retrait en 2h",
-        "disponible pour retrait", "disponible au retrait",
+        "disponible dans le magasin", "en rayon", "article en rayon",
+        "retrait 1h en magasin", "retrait 1h gratuit", "retrait sous 2h",
+        "retrait en 2h", "disponible pour retrait", "disponible au retrait",
         "disponible a la collecte", "available to collect",
+        "click & collect disponible", "click and collect disponible",
+        "click & collect en 1h", "click and collect en 1h",
     )
     explicit_out = (
         "indisponible en magasin", "non disponible en magasin",
