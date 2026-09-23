@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bot de surveillance Pokémon / One Piece TCG — V8 prix +10%.
+Bot de surveillance Pokémon / One Piece TCG — V10 prix + stock magasin Lyon.
 
 Format products.txt:
     Nom | URL | prix_normal
@@ -47,6 +47,24 @@ PRICE_FILTER_ENABLED = os.environ.get("PRICE_FILTER_ENABLED", "1") != "0"
 PRICE_REQUIRED = os.environ.get("PRICE_REQUIRED", "1") != "0"
 PRICE_TOLERANCE_PCT = float(os.environ.get("PRICE_TOLERANCE_PCT", "10"))
 ALERT_ON_PREORDER = os.environ.get("ALERT_ON_PREORDER", "1") != "0"
+
+# Stock physique / retrait magasin — zone Lyon métropole.
+PHYSICAL_STOCK_ENABLED = os.environ.get("PHYSICAL_STOCK_ENABLED", "1") != "0"
+PHYSICAL_ALERT_ENABLED = os.environ.get("PHYSICAL_ALERT_ENABLED", "1") != "0"
+PHYSICAL_SCAN_EVERY = int(os.environ.get("PHYSICAL_SCAN_EVERY", "120"))
+PHYSICAL_STORE_RADIUS_LABEL = os.environ.get("PHYSICAL_STORE_RADIUS_LABEL", "Lyon métropole")
+# On ne considère comme stock local certain que les magasins explicitement
+# retrouvés dans la page ou les données structurées du distributeur.
+LYON_STORE_NAMES = tuple(x.strip() for x in os.environ.get(
+    "LYON_STORE_NAMES",
+    "Fnac Lyon Bellecour|Fnac Lyon Part-Dieu|Fnac Lyon - Gare Part-Dieu|"
+    "Carrefour Lyon Part Dieu|Carrefour Lyon Confluence|Carrefour Vénissieux|"
+    "Auchan Supermarché Lyon Gerland|Auchan Supermarché Lyon Félix Faure|Auchan Supermarché Garibaldi - Lyon|"
+    "Cultura Champagne-au-Mont-d'Or|Cultura Saint-Priest|"
+    "King Jouet Lyon Grolée|King Jouet Boutique Lyon 4ème|King Jouet Orchestra Lyon|"
+    "Smyths Toys Bron|JouéClub Lyon Confluence|La Grande Récré LYON|"
+    "Micromania - Zing LYON CENTRE VILLE|Micromania - Zing LYON PART DIEU|Micromania - Zing LYON GRENETTE"
+).split("|" ) if x.strip())
 
 # Scheduler adaptatif
 DEFAULT_INTERVAL = int(os.environ.get("DEFAULT_INTERVAL", "60"))
@@ -572,6 +590,9 @@ def new_entry():
         "last_http_status": None,
         "errors": 0,
         "last_price": None,
+        "physical_status": None,
+        "physical_stores": [],
+        "physical_checked_at": 0,
     }
 
 def new_state():
@@ -625,6 +646,116 @@ def save_state(state):
 def accepted_price(reference_price: float) -> float:
     return round(reference_price * (1 + PRICE_TOLERANCE_PCT / 100.0), 2)
 
+def _physical_status_from_html(html: str, retailer: str = "") -> tuple[str | None, list[str]]:
+    """Détecte ce que la fiche officielle expose sur le stock magasin.
+
+    On exige que le marqueur de disponibilité soit proche du nom du magasin
+    lorsqu'un magasin Lyon précis est annoncé, afin d'éviter les faux positifs
+    dus à un simple pied de page ou à un annuaire de magasins.
+    """
+    if not html:
+        return None, []
+    low = html_lib.unescape(html).lower()
+    explicit_in = (
+        "en stock en magasin", "stock en magasin", "disponible en magasin",
+        "disponible dans votre magasin", "retrait 1h en magasin",
+        "retrait magasin", "réservation magasin", "reservation magasin",
+        "click & collect", "click and collect", "e-réservation", "e-reservation",
+    )
+    explicit_out = (
+        "indisponible en magasin", "non disponible en magasin",
+        "aucun magasin disponible", "pas disponible en magasin",
+    )
+    has_in = any(x in low for x in explicit_in)
+    has_out = any(x in low for x in explicit_out)
+
+    aliases = {
+        "Fnac Lyon Bellecour": ("fnac lyon bellecour", "fnac bellecour"),
+        "Fnac Lyon Part-Dieu": ("fnac lyon part-dieu", "fnac part-dieu"),
+        "Fnac Lyon - Gare Part-Dieu": ("fnac lyon - gare part-dieu", "fnac gare part-dieu"),
+        "Carrefour Lyon Part Dieu": ("carrefour lyon part dieu", "carrefour part dieu"),
+        "Carrefour Lyon Confluence": ("carrefour lyon confluence", "carrefour confluence"),
+        "Carrefour Vénissieux": ("carrefour vénissieux", "carrefour venissieux"),
+        "Auchan Supermarché Lyon Gerland": ("auchan supermarché lyon gerland", "auchan lyon gerland"),
+        "Auchan Supermarché Lyon Félix Faure": ("auchan supermarché lyon félix faure", "auchan lyon félix faure"),
+        "Auchan Supermarché Garibaldi - Lyon": ("auchan supermarché garibaldi - lyon", "auchan garibaldi"),
+        "Cultura Champagne-au-Mont-d'Or": ("cultura champagne-au-mont-d'or", "cultura champagne au mont d'or"),
+        "Cultura Saint-Priest": ("cultura saint-priest", "cultura saint priest"),
+        "King Jouet Lyon Grolée": ("king jouet lyon grolée", "king jouet lyon grolee"),
+        "King Jouet Boutique Lyon 4ème": ("king jouet boutique lyon 4ème", "king jouet boutique lyon 4eme"),
+        "King Jouet Orchestra Lyon": ("king jouet orchestra lyon", "king jouet carré de soie", "king jouet carre de soie"),
+        "Smyths Toys Bron": ("smyths toys bron",),
+        "JouéClub Lyon Confluence": ("jouéclub lyon confluence", "joueclub lyon confluence"),
+        "La Grande Récré LYON": ("la grande récré lyon", "la grande recre lyon"),
+        "Micromania - Zing LYON CENTRE VILLE": ("micromania - zing lyon centre ville", "micromania lyon centre ville"),
+        "Micromania - Zing LYON PART DIEU": ("micromania - zing lyon part dieu", "micromania lyon part dieu"),
+        "Micromania - Zing LYON GRENETTE": ("micromania - zing lyon grenette", "micromania lyon grenette"),
+    }
+    stores = []
+    for store, variants in aliases.items():
+        for variant in variants:
+            pos = low.find(variant)
+            if pos < 0:
+                continue
+            context = low[max(0, pos - 1200):min(len(low), pos + 1800)]
+            if any(marker in context for marker in explicit_in):
+                stores.append(store)
+                break
+
+    if stores:
+        return "in", list(dict.fromkeys(stores))
+    if has_out and not has_in:
+        return "out", []
+    if has_in:
+        # La fiche indique du stock/retrait magasin, mais pas de magasin Lyon
+        # explicitement exploitable.
+        return "possible", []
+    return None, []
+
+def physical_result(product: dict, html: str) -> dict:
+    status, stores = _physical_status_from_html(html)
+    return {
+        "physical_status": status,
+        "physical_stores": stores,
+        "physical_checked_at": time.time(),
+    }
+
+
+def _physical_alert_body(result: dict) -> str:
+    stores = result.get("physical_stores") or []
+    where = ", ".join(stores) if stores else "un magasin de la zone Lyon (sans magasin précis exposé)"
+    price = result.get("price")
+    price_text = f"Prix en ligne : {price:.2f} €" if isinstance(price, (int, float)) else "Prix en ligne : non déterminé"
+    return (
+        f"🏬 STOCK MAGASIN DÉTECTÉ — {result['name']}\n"
+        f"Zone : {PHYSICAL_STORE_RADIUS_LABEL}\n"
+        f"Magasin(s) : {where}\n"
+        f"{price_text}\n"
+        f"{result['url']}\n\n"
+        "Vérification finale conseillée sur la page du magasin avant de te déplacer."
+    )
+
+
+def maybe_notify_physical(state: dict, result: dict):
+    if not PHYSICAL_ALERT_ENABLED:
+        return
+    if result.get("physical_status") != "in":
+        return
+    entry = state["products"].setdefault(result["url"], new_entry())
+    current = tuple(result.get("physical_stores") or [])
+    previous = tuple(entry.get("physical_stores") or [])
+    # Alerte à la première détection puis seulement si le magasin local change.
+    if not previous or current != previous or entry.get("physical_status") != "in":
+        notify(
+            f"🏬 Stock magasin Lyon : {result['name']}",
+            _physical_alert_body(result),
+            priority="5",
+            tags="shopping_cart,department_store",
+        )
+    entry["physical_status"] = result.get("physical_status")
+    entry["physical_stores"] = list(current)
+    entry["physical_checked_at"] = result.get("physical_checked_at", time.time())
+
 def check_one(product: dict) -> dict:
     result = {
         **product,
@@ -633,6 +764,9 @@ def check_one(product: dict) -> dict:
         "price": None,
         "error": None,
         "http_status": None,
+        "physical_status": None,
+        "physical_stores": [],
+        "physical_checked_at": 0,
     }
 
     try:
@@ -641,6 +775,8 @@ def check_one(product: dict) -> dict:
 
         if PRICE_FILTER_ENABLED:
             result["price"] = extract_price(html)
+        if PHYSICAL_STOCK_ENABLED:
+            result.update(physical_result(product, html))
     except FetchError as exc:
         result["error"] = str(exc)
         result["http_status"] = exc.status_code
@@ -719,6 +855,9 @@ def process_result(state, result):
     entry["status"] = result["status"]
     entry["last_price"] = result["price"]
 
+    # Stock magasin local : indépendant du stock en ligne et du filtre prix.
+    maybe_notify_physical(state, result)
+
     labels = {
         "in": "EN STOCK",
         "preorder": "PRÉCOMMANDE",
@@ -796,6 +935,7 @@ def process_result(state, result):
             entry["alerted"] = True
 
     schedule_next(entry, result, now)
+
 
 def run_due(state, products, deadline):
     now = time.time()
@@ -1343,6 +1483,8 @@ def main():
                         help="intervalle de base du mode --fast")
     parser.add_argument("--test", action="store_true",
                         help="teste ntfy")
+    parser.add_argument("--physical", action="store_true",
+                        help="force un scan des fiches pour détecter le stock magasin Lyon")
     args = parser.parse_args()
 
     if args.test:
@@ -1352,6 +1494,18 @@ def main():
             priority="3",
             tags="white_check_mark",
         ) else 1)
+
+    if args.physical:
+        try:
+            products = load_products()
+        except RuntimeError as exc:
+            print(f"! {exc}")
+            sys.exit(2)
+        state = load_state()
+        for product in products:
+            state["products"].setdefault(product["url"], new_entry())["next_check"] = 0
+        safe_cycle(state, products)
+        return
 
     try:
         products = load_products()
