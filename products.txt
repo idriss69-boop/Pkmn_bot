@@ -113,14 +113,6 @@ Smyths Toys - OP-17 Double Pack | https://www.smythstoys.com/fr/fr-fr/jouets/jeu
 La Grande Recre - OP-17 Double Pack | https://www.lagranderecre.fr/jeux-de-societe/cartes-a-collectionner/one-piece-card-game-double-pack-op17.html | 12.99
 
 
-# ---------- ONE PIECE CARD GAME : EB-05 Heroines Edition vol.2 (sortie ~octobre 2026) ----------
-PixelHeart - EB-05 display FR (précommande) | https://www.pixelheart.eu/fr/produit/one-piece-24-extra-booster-box-eb05-heroines-edition-vol-2-version-francaise/ | 189.90
-
-# EB-05 chez King Jouet / Joueclub / Fnac / Ludisphere / Gentlemen du Jeu : pages pas encore
-# publiées au 22/09/2026. Dès qu'une boutique ouvre sa précommande, ajoute la ligne ici
-# au même format que ci-dessus.
-
-
 # ---------- ONE PIECE CARD GAME : OP-18 (sortie mondiale annoncée ~novembre 2026) ----------
 # Bandai n'a pas encore donné de date officielle ni ouvert de page produit en France
 # (aucune enseigne FR n'a de fiche produit au 22/09/2026). Repasse compléter cette
@@ -130,14 +122,6 @@ Carrefour - OP-17 Double Pack | https://www.carrefour.fr/p/double-pack-one-piece
 Cultura - OP-17 Double Pack | https://www.cultura.com/p-one-piece-card-game-double-pack-op17-4582770058741.html
 Smyths Toys - OP-17 Double Pack | https://www.smythstoys.com/fr/fr-fr/jouets/jeux-de-societe-et-puzzles/cartes-a-collectionner/cartes-one-piece/one-piece-double-pack-op17/p/261850
 La Grande Recre - OP-17 Double Pack | https://www.lagranderecre.fr/jeux-de-societe/cartes-a-collectionner/one-piece-card-game-double-pack-op17.html
-
-
-# ---------- ONE PIECE CARD GAME : EB-05 Heroines Edition vol.2 (sortie ~octobre 2026) ----------
-PixelHeart - EB-05 display FR (précommande) | https://www.pixelheart.eu/fr/produit/one-piece-24-extra-booster-box-eb05-heroines-edition-vol-2-version-francaise/
-
-# EB-05 chez King Jouet / Joueclub / Fnac / Ludisphere / Gentlemen du Jeu : pages pas encore
-# publiées au 22/09/2026. Dès qu'une boutique ouvre sa précommande, ajoute la ligne ici
-# au même format que ci-dessus.
 
 
 # ---------- ONE PIECE CARD GAME : OP-18 (sortie mondiale annoncée ~novembre 2026) ----------
