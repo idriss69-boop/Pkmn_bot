@@ -2,8 +2,8 @@ name: Bot de stock Pokémon
 
 on:
   schedule:
-    # S'exécute toutes les 15 minutes
-    - cron: '*/15 * * * *'
+    # S'exécute toutes les 5 minutes
+    - cron: '*/5 * * * *'
   workflow_dispatch: # Permet le lancement manuel depuis l'onglet Actions
 
 jobs:
