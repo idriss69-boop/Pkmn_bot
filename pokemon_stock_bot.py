@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Bot de surveillance Pokémon / One Piece TCG — V14 prix + stock magasin Lyon.
-Version corrigée : élimination stricte des fausses alertes sur les ruptures de stock.
+Version corrigée et optimisée : élimination stricte des fausses alertes, 
+correction du stub de découverte et gestion propre des alertes de configuration.
 """
 
 import argparse
@@ -36,6 +37,9 @@ except ImportError:
 
 NTFY_TOPIC = (os.environ.get("NTFY_TOPIC") or "CHANGE-MOI-pokestock-secret-123").strip()
 TOPIC_UNSET = NTFY_TOPIC.startswith("CHANGE-MOI")
+
+if TOPIC_UNSET:
+    print("  ! ATTENTION : NTFY_TOPIC utilise la valeur par défaut. Pense à le configurer pour recevoir les notifications.")
 
 PRICE_FILTER_ENABLED = os.environ.get("PRICE_FILTER_ENABLED", "1") != "0"
 PRICE_REQUIRED = os.environ.get("PRICE_REQUIRED", "1") != "0"
@@ -999,21 +1003,15 @@ def process_result(state, result):
     )
     print(f"- {result['name']}: {label} [{result['source']}]{price_txt}")
 
-    # =========================================================================
-    # CORRECTION CRITIQUE : Empêcher absolument toute alerte si le produit 
-    # n'est PAS explicitement en stock ("in") ou en précommande ("preorder").
-    # =========================================================================
     is_in_stock = (result["status"] == "in")
     is_preorder = (result["status"] == "preorder" and ALERT_ON_PREORDER)
 
     if not (is_in_stock or is_preorder):
-        # Le produit est épuisé, bloqué, ou inconnu : on réinitialise l'alerte
         entry["alerted"] = False
         entry["weak_hits"] = 0
         schedule_next(entry, result, now)
         return
 
-    # Vérification du filtre prix (uniquement si le produit est dispo/préco)
     price_ok = True
     if PRICE_FILTER_ENABLED:
         if result["price"] is None:
@@ -1038,7 +1036,6 @@ def process_result(state, result):
         schedule_next(entry, result, now)
         return
 
-    # Détection faible: confirmation sur deux lectures.
     if result["source"] == "keywords":
         entry["weak_hits"] = int(entry.get("weak_hits", 0)) + 1
         if entry["weak_hits"] < WEAK_CONFIRMATIONS:
@@ -1580,7 +1577,8 @@ def activate_new_discoveries(state: dict, products: list[dict], discovered: list
 
 
 def discover_new_products(products: list[dict]) -> list[dict]:
-    return []
+    """Découverte de nouveaux produits (redirection propre vers la recherche moteurs)."""
+    return discover_via_search_engines(products)
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -1652,8 +1650,6 @@ def main():
     if DISCOVERY_ENABLED:
         try:
             newly = discover_new_products(products)
-            if SEARCH_DISCOVERY_ENABLED:
-                newly += discover_via_search_engines(products)
             if newly:
                 activate_new_discoveries(state, products, newly)
             else:
@@ -1679,8 +1675,6 @@ def main():
             if DISCOVERY_ENABLED and time.time() - state.get("last_discovery", 0) >= min(DISCOVERY_EVERY, 300):
                 try:
                     newly = discover_new_products(products)
-                    if SEARCH_DISCOVERY_ENABLED:
-                        newly += discover_via_search_engines(products)
                     if newly:
                         activate_new_discoveries(state, products, newly)
                     else:
@@ -1705,8 +1699,6 @@ def main():
             if DISCOVERY_ENABLED and time.time() - state.get("last_discovery", 0) >= DISCOVERY_EVERY:
                 try:
                     newly = discover_new_products(products)
-                    if SEARCH_DISCOVERY_ENABLED:
-                        newly += discover_via_search_engines(products)
                     if newly:
                         activate_new_discoveries(state, products, newly)
                     else:
