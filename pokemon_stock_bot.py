@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
 """
-Bot de surveillance Pokémon / One Piece TCG — V10 prix + stock magasin Lyon.
-
-Format products.txt:
-    Nom | URL | prix_normal
-
-Le bot applique automatiquement PRICE_TOLERANCE_PCT (10 % par défaut).
-Exemple : prix normal 59,99 € -> alerte seulement jusqu'à 65,99 €.
-
-Aucune commande ni achat automatique n'est effectué.
+Bot de surveillance Pokémon / One Piece TCG — V25 (Toutes sorties TCG + Syntaxes 30 ans & Lyon).
 """
 
 import argparse
@@ -38,7 +30,7 @@ except ImportError:
     HAS_BROTLI = False
 
 # ---------------------------------------------------------------------------
-# CONFIG
+# CONFIGURATION GENERALE
 # ---------------------------------------------------------------------------
 
 NTFY_TOPIC = (os.environ.get("NTFY_TOPIC") or "CHANGE-MOI-pokestock-secret-123").strip()
@@ -52,24 +44,12 @@ ALERT_ON_PREORDER = os.environ.get("ALERT_ON_PREORDER", "1") != "0"
 # Stock physique / retrait magasin — zone Lyon métropole.
 PHYSICAL_STOCK_ENABLED = os.environ.get("PHYSICAL_STOCK_ENABLED", "1") != "0"
 PHYSICAL_ALERT_ENABLED = os.environ.get("PHYSICAL_ALERT_ENABLED", "1") != "0"
-PHYSICAL_SCAN_EVERY = int(os.environ.get("PHYSICAL_SCAN_EVERY", "120"))
+PHYSICAL_ALERT_COOLDOWN = int(os.environ.get("PHYSICAL_ALERT_COOLDOWN", "600"))
 PHYSICAL_STORE_RADIUS_LABEL = os.environ.get("PHYSICAL_STORE_RADIUS_LABEL", "Lyon métropole")
-# On ne considère comme stock local certain que les magasins explicitement
-# retrouvés dans la page ou les données structurées du distributeur.
-LYON_STORE_NAMES = tuple(x.strip() for x in os.environ.get(
-    "LYON_STORE_NAMES",
-    "Fnac Lyon Bellecour|Fnac Lyon Part-Dieu|Fnac Lyon - Gare Part-Dieu|"
-    "Carrefour Lyon Part Dieu|Carrefour Lyon Confluence|Carrefour Market Lyon Frères Lumière|Carrefour Vénissieux|"
-    "Auchan Supermarché Lyon Gerland|Auchan Supermarché Lyon Félix Faure|Auchan Supermarché Garibaldi - Lyon|Auchan Supermarché City Lyon Université|"
-    ""
-    "King Jouet Lyon Grolée|King Dultes Lyon Part-Dieu|King Jouet Boutique Lyon 4ème|King Jouet Orchestra Lyon/Carré de Soie|King Jouet Caluire|King Jouet Givors|"
-    "Smyths Toys Bron|JouéClub Lyon Confluence|La Grande Récré LYON La Part Dieu|"
-    "Micromania - Zing LYON CENTRE VILLE|Micromania - Zing LYON PART DIEU|Micromania - Zing LYON GRENETTE"
-).split("|" ) if x.strip())
 
 # Scheduler adaptatif
 DEFAULT_INTERVAL = int(os.environ.get("DEFAULT_INTERVAL", "60"))
-PRIORITY_INTERVAL = int(os.environ.get("PRIORITY_INTERVAL", "20"))
+PRIORITY_INTERVAL = int(os.environ.get("PRIORITY_INTERVAL", "15"))
 MIN_INTERVAL = int(os.environ.get("MIN_INTERVAL", "15"))
 MAX_INTERVAL = int(os.environ.get("MAX_INTERVAL", "900"))
 COOLDOWN_429 = int(os.environ.get("COOLDOWN_429", "120"))
@@ -84,26 +64,43 @@ MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "6"))
 RUN_DEADLINE = int(os.environ.get("RUN_DEADLINE", "200"))
 
 WEAK_CONFIRMATIONS = int(os.environ.get("WEAK_CONFIRMATIONS", "2"))
-HEARTBEAT_EVERY_HOURS = int(os.environ.get("HEARTBEAT_EVERY_HOURS", "24"))
-PROBLEM_ALERT_MINUTES = int(os.environ.get("PROBLEM_ALERT_MINUTES", "30"))
 ALERT_COOLDOWN_HOURS = int(os.environ.get("ALERT_COOLDOWN_HOURS", "6"))
 
 BASE_DIR = Path(__file__).resolve().parent
 PRODUCTS_FILE = BASE_DIR / "products.txt"
 STATE_FILE = BASE_DIR / "stock_state.json"
 DISCOVERY_FILE = BASE_DIR / "discovered_products.txt"
+
 AUTO_ADD_DISCOVERED = os.environ.get("AUTO_ADD_DISCOVERED", "1") != "0"
 DISCOVERY_ENABLED = os.environ.get("DISCOVERY_ENABLED", "1") != "0"
-DISCOVERY_MAX_PER_HOST = int(os.environ.get("DISCOVERY_MAX_PER_HOST", "12"))
-DISCOVERY_TIMEOUT = int(os.environ.get("DISCOVERY_TIMEOUT", "12"))
-DISCOVERY_EVERY = int(os.environ.get("DISCOVERY_EVERY", "300"))
-SEARCH_DISCOVERY_ENABLED = os.environ.get("SEARCH_DISCOVERY_ENABLED", "1") != "0"
-SEARCH_ENGINE = os.environ.get("SEARCH_ENGINE", "both").lower()
-SEARCH_RESULTS_PER_QUERY = int(os.environ.get("SEARCH_RESULTS_PER_QUERY", "6"))
-SEARCH_QUERIES_PER_HOST = int(os.environ.get("SEARCH_QUERIES_PER_HOST", "4"))
-SEARCH_TIMEOUT = int(os.environ.get("SEARCH_TIMEOUT", "12"))
-AUTO_REFRESH_PRICES = os.environ.get("AUTO_REFRESH_PRICES", "1") != "0"
-PRICE_REFRESH_HOURS = float(os.environ.get("PRICE_REFRESH_HOURS", "12"))
+DISCOVERY_EVERY = int(os.environ.get("DISCOVERY_EVERY", "180"))
+
+# MOTS CLES ET TERMES DE PURGE / DECOUVERTE
+PURGE_PRODUCT_TERMS = (
+    "storm emerald", "storm emerald m6", "eb-05", "eb05", "heroines edition vol. 2",
+)
+
+DISCOVERY_KEYWORDS = (
+    "pokemon", "pokémon", "one-piece", "onepiece", "one_piece", "optcg",
+    "op-", "eb-", "me-", "ev-", "sv-", "display", "booster", "etb", "coffret",
+    "bundle", "blister", "pack", "box", "30th", "30ans", "30-ans", "delta",
+)
+
+# Produits prioritaires : passe immédiatement en surveillance accélérée à la découverte
+DROP_PRIORITY_TERMS = (
+    # One Piece
+    "op17", "op-17", "op 17", "double pack", "double-pack", "duo pack", "duo-pack",
+    "op18", "op-18", "op 18", "the dominance of god", "dominance of god",
+    # Pokémon 30 ans (Toutes les syntaxes)
+    "30e anniversaire", "30ème anniversaire", "30eme anniversaire",
+    "30 ème anniversaire", "30 eme anniversaire", "30th anniversary", "30th-anniversary",
+    "30th celebration", "30 ans", "30ans", "30 ans pokémon", "pokémon 30 ans",
+    # Règne Delta
+    "règne delta", "règne delta m6", "delta reign", "me06",
+    # Coffrets majeurs
+    "upc", "ultra premium",
+)
+DROP_PRIORITY_INTERVAL = int(os.environ.get("DROP_PRIORITY_INTERVAL", "10"))
 
 HEADERS = {
     "User-Agent": (
@@ -111,67 +108,76 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/128.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
-              "image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br" if HAS_BROTLI else "gzip, deflate",
     "Sec-Ch-Ua": '"Chromium";v="128", "Not=A?Brand";v="24", "Google Chrome";v="128"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
     "Upgrade-Insecure-Requests": "1",
 }
 
 TRANSIENT_HTTP = {408, 425, 429, 500, 502, 503, 504}
 
 # ---------------------------------------------------------------------------
-# STOCK DETECTION
+# FILTRES PRODUITS (TOUTES SORTIES + CIBLES SPÉCIFIQUES)
 # ---------------------------------------------------------------------------
 
-IN_KEYS = {"instock", "limitedavailability", "onlineonly", "instoreonly",
-           "availablefororder", "true"}
+IN_KEYS = {"instock", "limitedavailability", "onlineonly", "instoreonly", "availablefororder", "true"}
 PRE_KEYS = {"preorder", "presale", "backorder"}
 OUT_KEYS = {"outofstock", "soldout", "discontinued", "oos", "false"}
 
 SCHEMA_RE = re.compile(
     r'(?:schema\.org/|"availability"\s*:\s*")'
-    r"(InStock|LimitedAvailability|OnlineOnly|InStoreOnly|"
-    r"PreOrder|PreSale|BackOrder|OutOfStock|SoldOut|Discontinued)",
+    r"(InStock|LimitedAvailability|OnlineOnly|InStoreOnly|PreOrder|PreSale|BackOrder|OutOfStock|SoldOut|Discontinued)",
     re.I,
 )
 OG_RES = [
-    re.compile(
-        r"""(?:product|og):availability["']\s+content=["']([^"']+)["']""",
-        re.I,
-    ),
-    re.compile(
-        r"""content=["']([^"']+)["']\s+(?:property|name)=["'](?:product|og):availability["']""",
-        re.I,
-    ),
+    re.compile(r"""(?:product|og):availability["']\s+content=["']([^"']+)["']""", re.I),
+    re.compile(r"""content=["']([^"']+)["']\s+(?:property|name)=["'](?:product|og):availability["']""", re.I),
 ]
-LD_RE = re.compile(
-    r"""<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>""",
-    re.I | re.S,
-)
+LD_RE = re.compile(r"""<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>""", re.I | re.S)
 NEXT_DATA_RE = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.I | re.S)
 
-OUT_WORDS = [
-    "épuisé", "epuise", "rupture de stock", "out of stock", "sold out",
-    "indisponible", "plus disponible", "victime de son succès",
-]
-IN_WORDS = [
-    "ajouter au panier", "add to cart", "ajouter à la commande",
-    "acheter maintenant", "commander",
-]
+OUT_WORDS = ["épuisé", "epuise", "rupture de stock", "out of stock", "sold out", "indisponible", "plus disponible", "victime de son succès"]
+IN_WORDS = ["ajouter au panier", "add to cart", "ajouter à la commande", "acheter maintenant", "commander"]
 PRE_WORDS = ["précommande", "precommande", "pre-order", "preorder"]
-BLOCK_WORDS = [
-    "captcha", "access denied", "just a moment", "datadome",
-    "verify you are human", "unusual traffic", "vérification de sécurité",
-    "robot check", "cf-chl",
-]
+BLOCK_WORDS = ["captcha", "access denied", "just a moment", "datadome", "verify you are human", "unusual traffic", "robot check", "cf-chl"]
+
+
+def is_relevant_pokemon_candidate(title: str, url: str = "") -> bool:
+    """Valide TOUT produit Pokémon TCG (standard ou spécial)."""
+    haystack = f"{title} {url}".lower()
+    pokemon = any(x in haystack for x in ("pokemon", "pokémon", "pokemon tcg", "pokémon tcg", "pokemon jcc", "pokémon jcc"))
+    product_term = (
+        any(x in haystack for x in (
+            "etb", "coffret", "bundle", "booster", "display", "booster box",
+            "box", "pack", "tripack", "duopack", "collection", "tin", "mini tin",
+            "blister", "deck", "starter deck", "upc", "ultra premium",
+            "règne delta", "delta reign", "30 ans", "30th"
+        ))
+        or re.search(r"\bme\d{2}\b", haystack) is not None
+        or re.search(r"\bev\d{2}\b", haystack) is not None
+        or re.search(r"\beb\d{2}\b", haystack) is not None
+        or re.search(r"\bsv\d{2}\b", haystack) is not None
+        or re.search(r"\bupc\b", haystack) is not None
+    )
+    return pokemon and product_term
+
+
+def is_relevant_onepiece_candidate(title: str, url: str = "") -> bool:
+    """Valide TOUT produit One Piece TCG (OP01 à OP99, EB01, etc.)."""
+    haystack = f"{title} {url}".lower()
+    one_piece = any(x in haystack for x in ("one piece", "onepiece", "one-piece", "optcg"))
+    product_term = (
+        re.search(r"\bop\s*-?\s*\d{1,2}\b", haystack) is not None
+        or re.search(r"\beb\s*-?\s*\d{1,2}\b", haystack) is not None
+        or any(x in haystack for x in (
+            "dominance of god", "duo pack", "duo-pack", "double pack", "double-pack",
+            "booster", "display", "booster box", "starter deck", "deck", "box", "collection"
+        ))
+    )
+    return one_piece and product_term
 
 def _norm(value) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value).lower().rsplit("/", 1)[-1])
@@ -188,11 +194,7 @@ def _walk(node):
 def _is_product(node: dict) -> bool:
     t = node.get("@type")
     types = t if isinstance(t, list) else [t]
-    return any(
-        isinstance(x, str) and x.lower() in
-        ("product", "productgroup", "individualproduct")
-        for x in types
-    )
+    return any(isinstance(x, str) and x.lower() in ("product", "productgroup", "individualproduct") for x in types)
 
 def _ld_nodes(html: str):
     for match in LD_RE.finditer(html):
@@ -287,14 +289,8 @@ def classify(html: str):
 # PRICE DETECTION
 # ---------------------------------------------------------------------------
 
-PRICE_RE = re.compile(
-    r"""(?<![\d.,])(\d{1,4}(?:[ .]\d{3})*(?:[,.]\d{1,2})?)\s*(?:€|EUR)\b""",
-    re.I,
-)
-PRICE_RE_REV = re.compile(
-    r"""(?:€|EUR)\s*(\d{1,4}(?:[ .]\d{3})*(?:[,.]\d{1,2})?)(?![\d.,])""",
-    re.I,
-)
+PRICE_RE = re.compile(r"""(?<![\d.,])(\d{1,4}(?:[ .]\d{3})*(?:[,.]\d{1,2})?)\s*(?:€|EUR)\b""", re.I)
+PRICE_RE_REV = re.compile(r"""(?:€|EUR)\s*(\d{1,4}(?:[ .]\d{3})*(?:[,.]\d{1,2})?)(?![\d.,])""", re.I)
 
 def parse_price(value):
     if isinstance(value, (int, float)) and 0 < float(value) < 100000:
@@ -304,8 +300,6 @@ def parse_price(value):
 
     s = value.strip().replace("\xa0", " ")
     s = re.sub(r"\s+", " ", s)
-
-    # Formats français: 59,99 / 59.99 / 1 299,90
     s = re.sub(r"[^\d,.\s]", "", s).strip()
     if not s:
         return None
@@ -317,16 +311,15 @@ def parse_price(value):
         if s.count(".") > 1:
             s = s.replace(".", "")
     try:
-        value = float(s)
+        val = float(s)
     except ValueError:
         return None
-    if not (0 < value < 100000):
+    if not (0 < val < 100000):
         return None
-    return round(value, 2)
+    return round(val, 2)
 
 def _collect_json_prices(html: str):
     prices = []
-
     for data in _ld_nodes(html):
         for node in _walk(data):
             if not isinstance(node, dict):
@@ -370,7 +363,6 @@ def _collect_next_prices(html: str):
 def extract_price(html: str):
     prices = _collect_json_prices(html) + _collect_next_prices(html)
 
-    # Meta tags et attributs de prix.
     for pattern in (
         r"""(?:product:price:amount|price)["']?\s*(?:content|value)=["']([^"']+)["']""",
         r"""(?:content|value)=["']([^"']+)["']\s+(?:property|name)=["'](?:product:price:amount|price)["']""",
@@ -380,7 +372,6 @@ def extract_price(html: str):
             if p is not None:
                 prices.append(p)
 
-    # Repli texte, volontairement conservateur: seulement autour d'un symbole €.
     text = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.I | re.S)
     text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
     text = re.sub(r"<[^>]+>", " ", text)
@@ -394,8 +385,6 @@ def extract_price(html: str):
     if not prices:
         return None
 
-    # Les prix les plus bas sont généralement le prix courant.
-    # On évite les montants manifestement accessoires.
     prices = sorted(set(round(p, 2) for p in prices))
     return prices[0]
 
@@ -419,17 +408,8 @@ def _http_message(code: int) -> str:
 
 def _fetch_once(url: str) -> str:
     req = urllib.request.Request(url, headers=HEADERS)
-
-    proxy = (
-        os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or
-        os.environ.get("https_proxy") or os.environ.get("http_proxy")
-    )
-    opener = (
-        urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
-        )
-        if proxy else urllib.request.build_opener()
-    )
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy})) if proxy else urllib.request.build_opener()
 
     try:
         with opener.open(req, timeout=REQUEST_TIMEOUT) as response:
@@ -437,9 +417,7 @@ def _fetch_once(url: str) -> str:
             encoding = (response.headers.get("Content-Encoding") or "").lower()
             charset = response.headers.get_content_charset() or "utf-8"
     except urllib.error.HTTPError as exc:
-        raise FetchError(
-            _http_message(exc.code), exc.code in TRANSIENT_HTTP, exc.code
-        ) from exc
+        raise FetchError(_http_message(exc.code), exc.code in TRANSIENT_HTTP, exc.code) from exc
 
     if encoding == "gzip":
         raw = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw, MAX_PAGE_BYTES)
@@ -467,38 +445,30 @@ def fetch(url: str):
             return _fetch_once(url)
         except FetchError as exc:
             last = exc
-        except (urllib.error.URLError, http.client.HTTPException, OSError,
-                zlib.error, EOFError) as exc:
-            last = FetchError(
-                f"réseau ({exc.__class__.__name__})", True
-            )
+        except (urllib.error.URLError, http.client.HTTPException, OSError, zlib.error, EOFError) as exc:
+            last = FetchError(f"réseau ({exc.__class__.__name__})", True)
 
         if not last.transient or attempt >= FETCH_RETRIES:
             raise last
         time.sleep(1.5 * (attempt + 1) + random.random())
-    raise last
+    if last:
+        raise last
+    raise FetchError("Erreur réseau indéterminée")
 
 # ---------------------------------------------------------------------------
 # NOTIFICATIONS
 # ---------------------------------------------------------------------------
 
 def _header(text: str, limit: int = 200) -> str:
-    return " ".join(str(text).split()).encode(
-        "latin-1", "replace"
-    ).decode("latin-1")[:limit]
+    return " ".join(str(text).split()).encode("latin-1", "replace").decode("latin-1")[:limit]
 
-def notify(title: str, message: str, url: str = "", priority: str = "5",
-           tags: str = "rotating_light") -> bool:
+def notify(title: str, message: str, url: str = "", priority: str = "5", tags: str = "rotating_light") -> bool:
     if TOPIC_UNSET:
         print("  ! NTFY_TOPIC non configuré.")
         return False
 
     endpoint = "https://ntfy.sh/" + urllib.parse.quote(NTFY_TOPIC, safe="")
-    headers = {
-        "Title": _header(title),
-        "Priority": str(priority),
-        "Tags": tags,
-    }
+    headers = {"Title": _header(title), "Priority": str(priority), "Tags": tags}
     if url:
         headers["Click"] = url
 
@@ -506,9 +476,7 @@ def notify(title: str, message: str, url: str = "", priority: str = "5",
 
     for attempt in range(3):
         try:
-            req = urllib.request.Request(
-                endpoint, data=data, headers=headers, method="POST"
-            )
+            req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
             urllib.request.urlopen(req, timeout=15).read()
             print("  -> notification envoyée")
             return True
@@ -520,12 +488,10 @@ def notify(title: str, message: str, url: str = "", priority: str = "5",
     return False
 
 # ---------------------------------------------------------------------------
-# PRODUCTS.TXT
+# PRODUCTS & STATE
 # ---------------------------------------------------------------------------
 
-LINE_RE = re.compile(
-    r"^(.+?)\s*\|\s*(https?://\S+)\s*\|\s*([0-9]+(?:[.,][0-9]{1,2})?)\s*$"
-)
+LINE_RE = re.compile(r"^(.+?)\s*\|\s*(https?://\S+)\s*\|\s*([0-9]+(?:[.,][0-9]{1,2})?)\s*$")
 
 def load_products():
     try:
@@ -547,10 +513,7 @@ def load_products():
         if line.lower().replace(" ", "") in {"nom|url|prix_normal", "nom|url|prixnormal"}:
             continue
         if not match or "..." in match.group(2):
-            print(
-                f"! ligne {line_no} ignorée: format attendu "
-                "'Nom | URL | prix_normal'"
-            )
+            print(f"! ligne {line_no} ignorée: format attendu 'Nom | URL | prix_normal'")
             continue
 
         name = match.group(1).strip()
@@ -565,44 +528,23 @@ def load_products():
             continue
 
         seen.add(url)
-        products.append({
-            "name": name,
-            "url": url,
-            "reference_price": reference_price,
-        })
+        products.append({"name": name, "url": url, "reference_price": reference_price})
 
     if not products:
         raise RuntimeError("products.txt ne contient aucun produit valide.")
     return products
 
-# ---------------------------------------------------------------------------
-# STATE
-# ---------------------------------------------------------------------------
-
 def new_entry():
     return {
-        "status": None,
-        "alerted": False,
-        "weak_hits": 0,
-        "problem_since": 0,
-        "problem_alerted": False,
-        "next_check": 0,
-        "cooldown_until": 0,
-        "last_http_status": None,
-        "errors": 0,
-        "last_price": None,
-        "physical_status": None,
-        "physical_stores": [],
-        "physical_checked_at": 0,
+        "status": None, "alerted": False, "weak_hits": 0, "problem_since": 0,
+        "problem_alerted": False, "next_check": 0, "cooldown_until": 0,
+        "last_http_status": None, "errors": 0, "last_price": None,
+        "physical_status": None, "physical_stores": [], "physical_checked_at": 0,
+        "physical_last_alert": 0,
     }
 
 def new_state():
-    return {
-        "products": {},
-        "last_heartbeat": 0,
-        "last_crash_alert": 0,
-        "last_config_alert": 0,
-    }
+    return {"products": {}, "last_crash_alert": 0}
 
 def load_state():
     state = new_state()
@@ -616,9 +558,8 @@ def load_state():
         print(f"! état illisible ({exc}); nouveau state.")
         return state
 
-    for key in ("last_heartbeat", "last_crash_alert", "last_config_alert"):
-        if isinstance(data.get(key), (int, float)):
-            state[key] = data[key]
+    if isinstance(data.get("last_crash_alert"), (int, float)):
+        state["last_crash_alert"] = data["last_crash_alert"]
 
     if isinstance(data.get("products"), dict):
         for url, old in data["products"].items():
@@ -631,9 +572,7 @@ def load_state():
 
 def save_state(state):
     try:
-        payload = json.dumps(
-            state, indent=2, ensure_ascii=False, sort_keys=True
-        ) + "\n"
+        payload = json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
         tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
         tmp.write_text(payload, encoding="utf-8")
         os.replace(tmp, STATE_FILE)
@@ -641,21 +580,13 @@ def save_state(state):
         print(f"! écriture state impossible: {exc}")
 
 # ---------------------------------------------------------------------------
-# CHECK / PRICE POLICY
+# PHYSICAL STOCK (MAGASIN LYON)
 # ---------------------------------------------------------------------------
 
 def accepted_price(reference_price: float) -> float:
     return round(reference_price * (1 + PRICE_TOLERANCE_PCT / 100.0), 2)
 
 def _physical_status_from_html(html: str, retailer: str = "") -> tuple[str | None, list[str]]:
-    """Détecte le stock physique Lyon avec plusieurs signaux.
-
-    Priorité aux informations magasin réellement exposées par l'enseigne :
-    - nom du magasin + marqueur de disponibilité proche dans le HTML ;
-    - données JSON/Next.js contenant un magasin et un booléen de disponibilité ;
-    - sinon, un simple indicateur générique de retrait/stock magasin donne
-      seulement ``possible`` et ne déclenche PAS d'alerte locale.
-    """
     if not html:
         return None, []
 
@@ -670,158 +601,67 @@ def _physical_status_from_html(html: str, retailer: str = "") -> tuple[str | Non
     explicit_in = (
         "en stock en magasin", "stock en magasin", "disponible en magasin",
         "disponible dans votre magasin", "disponible dans ce magasin",
-        "disponible dans le magasin", "en rayon", "article en rayon",
-        "retrait 1h en magasin", "retrait 1h gratuit", "retrait sous 2h",
-        "retrait en 2h", "disponible pour retrait", "disponible au retrait",
-        "disponible a la collecte", "available to collect",
-        "click & collect disponible", "click and collect disponible",
-        "click & collect en 1h", "click and collect en 1h",
+        "disponible dans le magasin", "en rayon", "retrait 1h en magasin",
+        "retrait 1h gratuit", "retrait sous 2h", "retrait en 2h",
+        "disponible pour retrait", "disponible au retrait", "available to collect",
     )
     explicit_out = (
         "indisponible en magasin", "non disponible en magasin",
         "aucun magasin disponible", "pas disponible en magasin",
-        "indisponible dans ce magasin", "indisponible dans votre magasin",
     )
     has_out = any(x in low for x in explicit_out)
-    positive_phrases = tuple(x for x in explicit_in if x not in (
-        "disponible en magasin", "disponible dans votre magasin",
-        "disponible dans ce magasin", "disponible dans le magasin",
-    ))
+    positive_phrases = tuple(x for x in explicit_in if x not in ("disponible en magasin", "disponible dans votre magasin"))
     has_in = any(x in low for x in positive_phrases)
-    # Ces phrases positives sont des sous-chaînes de variantes négatives ;
-    # on ne les considère positives que si elles ne sont pas dans un contexte
-    # "indisponible/non disponible".
-    if re.search(r"(?<!in)disponible en magasin", low):
-        has_in = True
-    if re.search(r"(?<!in)disponible (?:dans votre|dans ce|dans le) magasin", low):
-        has_in = True
-    if has_out and not any(x in low for x in positive_phrases):
-        has_in = False
 
     aliases = {
-        "Fnac Lyon Bellecour": (
-            "fnac lyon bellecour", "fnac bellecour",
-            "fnac lyon 2", "fnac 85 rue de la republique",
-        ),
-        "Fnac Lyon Part-Dieu": (
-            "fnac lyon part-dieu", "fnac part-dieu", "fnac lyon part dieu",
-            "fnac 17 rue dr bouchut",
-        ),
-        "Fnac Lyon - Gare Part-Dieu": (
-            "fnac lyon - gare part-dieu", "fnac gare part-dieu",
-        ),
+        "Fnac Lyon Bellecour": ("fnac lyon bellecour", "fnac bellecour", "fnac lyon 2"),
+        "Fnac Lyon Part-Dieu": ("fnac lyon part-dieu", "fnac part-dieu", "fnac lyon part dieu"),
+        "Fnac Lyon - Gare Part-Dieu": ("fnac lyon - gare part-dieu", "fnac gare part-dieu"),
         "Carrefour Lyon Part Dieu": ("carrefour lyon part dieu", "carrefour part dieu"),
         "Carrefour Lyon Confluence": ("carrefour lyon confluence", "carrefour confluence"),
-        "Carrefour Market Lyon Frères Lumière": ("carrefour market lyon freres lumiere", "carrefour freres lumiere"),
+        "Carrefour Market Lyon Frères Lumière": ("carrefour market lyon freres lumiere",),
         "Carrefour Vénissieux": ("carrefour venissieux",),
         "Auchan Supermarché Lyon Gerland": ("auchan supermarche lyon gerland", "auchan lyon gerland"),
-        "Auchan Supermarché Lyon Félix Faure": ("auchan supermarche lyon felix faure", "auchan lyon felix faure"),
-        "Auchan Supermarché Garibaldi - Lyon": ("auchan supermarche garibaldi - lyon", "auchan garibaldi"),
-        "Auchan Supermarché City Lyon Université": ("auchan supermarche city lyon universite", "auchan lyon universite"),
-        "King Jouet Lyon Grolée": ("king jouet lyon grolee", "king jouet lyon grolée"),
-        "King Dultes Lyon Part-Dieu": ("king dultes lyon part dieu", "king dultes part dieu"),
-        "King Jouet Boutique Lyon 4ème": ("king jouet boutique lyon 4eme", "king jouet lyon 4eme"),
-        "King Jouet Orchestra Lyon/Carré de Soie": (
-            "king jouet orchestra lyon/carre de soie", "king jouet orchestra carre de soie", "king jouet carre de soie",
-            "king jouet vaulx-en-velin", "king jouet vaulx en velin", "king jouet 1 avenue de bohlen", "king jouet 1 av de bohlen",
-        ),
-        "King Jouet Caluire": ("king jouet caluire", "king jouet 2 montee des soldats"),
-        "King Jouet Givors": ("king jouet givors", "king jouet centre commercial des 2 vallees"),
+        "Auchan Supermarché Lyon Félix Faure": ("auchan supermarche lyon felix faure",),
+        "Auchan Supermarché Garibaldi - Lyon": ("auchan garibaldi",),
+        "King Jouet Lyon Grolée": ("king jouet lyon grolee",),
+        "King Jouet Boutique Lyon 4ème": ("king jouet lyon 4eme",),
         "Smyths Toys Bron": ("smyths toys bron",),
         "JouéClub Lyon Confluence": ("joueclub lyon confluence", "joueclub lyon"),
-        "La Grande Récré LYON La Part Dieu": ("la grande recre la part dieu", "la grande recre lyon la part dieu", "la grande recre lyon"),
-        "Micromania - Zing LYON CENTRE VILLE": ("micromania zing lyon centre ville", "micromania lyon centre ville"),
-        "Micromania - Zing LYON PART DIEU": ("micromania zing lyon part dieu", "micromania lyon part dieu"),
-        "Micromania - Zing LYON GRENETTE": ("micromania zing lyon grenette", "micromania lyon grenette"),
+        "La Grande Récré LYON La Part Dieu": ("la grande recre la part dieu",),
+        "Micromania - Zing LYON CENTRE VILLE": ("micromania lyon centre ville",),
+        "Micromania - Zing LYON PART DIEU": ("micromania lyon part dieu",),
+        "Micromania - Zing LYON GRENETTE": ("micromania lyon grenette",),
     }
 
-    # 1) Données structurées : utile lorsque le magasin est rendu par JS mais
-    # que son état reste présent dans __NEXT_DATA__ ou JSON-LD.
     stores = []
     try:
         blobs = []
         m = NEXT_DATA_RE.search(html)
-        if m:
-            blobs.append(json.loads(m.group(1)))
-        for data in _ld_nodes(html):
-            blobs.append(data)
+        if m: blobs.append(json.loads(m.group(1)))
+        for data in _ld_nodes(html): blobs.append(data)
 
         for data in blobs:
             for node in _walk(data):
-                if not isinstance(node, dict):
-                    continue
+                if not isinstance(node, dict): continue
                 flat = norm_text(" ".join(str(v) for v in node.values() if isinstance(v, (str, int, float, bool))))
-                if not flat:
-                    continue
                 for store, variants in aliases.items():
                     if any(v in flat for v in variants):
-                        # Booléens/noms de champs fréquemment rencontrés dans
-                        # les fiches magasin des enseignes.
-                        available_true = False
-                        available_false = False
-                        for key, value in node.items():
-                            k = norm_text(key)
-                            if isinstance(value, bool):
-                                if value and any(token in k for token in ("stock", "available", "disponib", "in_stock", "pickup", "retrait", "reservation")):
-                                    available_true = True
-                                if not value and any(token in k for token in ("stock", "available", "disponib", "in_stock", "pickup", "retrait", "reservation")):
-                                    available_false = True
-                        if available_true or any(marker in flat for marker in explicit_in):
+                        if any(marker in flat for marker in explicit_in):
                             stores.append(store)
-                        elif available_false and any(marker in flat for marker in explicit_out):
-                            pass
-                        break
     except Exception:
         pass
 
-    def positive_context(text: str) -> bool:
-        # Évite de considérer "indisponible en magasin" comme
-        # "disponible en magasin".
-        if any(x in text for x in explicit_out):
-            # Les signaux non ambigus restent valables : "en rayon",
-            # "retrait en 2h", "stock en magasin", etc.
-            strong = tuple(x for x in explicit_in if x not in (
-                "disponible en magasin", "disponible dans votre magasin",
-                "disponible dans ce magasin", "disponible dans le magasin",
-            ))
-            return any(x in text for x in strong)
-        return any(x in text for x in explicit_in)
-
-    # 2) HTML visible/attributs : le signal le plus courant sur Fnac/King Jouet.
     for store, variants in aliases.items():
         for variant in variants:
             pos = low.find(variant)
-            if pos < 0:
-                continue
-            context = low[max(0, pos - 1800):min(len(low), pos + 2600)]
-            if positive_context(context):
-                stores.append(store)
-                break
+            if pos >= 0:
+                context = low[max(0, pos - 1800):min(len(low), pos + 2600)]
+                if any(x in context for x in explicit_in) and not any(x in context for x in explicit_out):
+                    stores.append(store)
+                    break
 
     stores = list(dict.fromkeys(stores))
-
-    # Smyths est particulièrement sensible aux faux positifs : une fiche peut
-    # afficher "Click & Collect" sans que le magasin sélectionné ait réellement
-    # du stock. On exige donc un signal fort dans le voisinage du magasin.
-    if "smythstoys" in retailer.lower() or "smyths" in low:
-        strict_stores = []
-        strong_smyths = (
-            "en stock en magasin", "stock en magasin", "disponible en magasin",
-            "en rayon", "available to collect", "available for collection",
-            "available in store", "in stock at", "in stock in store",
-            "retrait sous 2h", "retrait en 2h",
-        )
-        for store in stores:
-            variants = aliases.get(store, ())
-            for variant in variants:
-                pos = low.find(variant)
-                if pos >= 0:
-                    context = low[max(0, pos - 1800):min(len(low), pos + 2600)]
-                    if any(x in context for x in strong_smyths) and not any(x in context for x in explicit_out):
-                        strict_stores.append(store)
-                        break
-        stores = list(dict.fromkeys(strict_stores))
-
     if stores:
         return "in", stores
     if has_out and not has_in:
@@ -839,62 +679,115 @@ def physical_result(product: dict, html: str) -> dict:
         "physical_checked_at": time.time(),
     }
 
-
-def _physical_alert_body(result: dict) -> str:
-    stores = result.get("physical_stores") or []
-    if stores:
-        where = "\n".join(f"🟢 {store} : STOCK DÉTECTÉ" for store in stores)
-    else:
-        where = "🟡 Stock magasin détecté, mais magasin précis non exposé"
-    price = result.get("price")
-    price_text = f"Prix en ligne : {price:.2f} €" if isinstance(price, (int, float)) else "Prix en ligne : non déterminé"
-    return (
-        f"🏬 STOCK MAGASIN DÉTECTÉ — {result['name']}\n"
-        f"Zone : {PHYSICAL_STORE_RADIUS_LABEL}\n"
-        f"{where}\n"
-        f"{price_text}\n"
-        f"{result['url']}\n\n"
-        "Vérification finale conseillée sur la page du magasin avant de te déplacer."
-    )
-
-
 def maybe_notify_physical(state: dict, result: dict):
-    if not PHYSICAL_ALERT_ENABLED:
-        return
-    if result.get("physical_status") != "in":
+    if not PHYSICAL_ALERT_ENABLED or result.get("physical_status") != "in":
         return
     entry = state["products"].setdefault(result["url"], new_entry())
     current = tuple(result.get("physical_stores") or [])
     previous = tuple(entry.get("physical_stores") or [])
-    # Alerte à la première détection puis seulement si le magasin local change.
-    if not previous or current != previous or entry.get("physical_status") != "in":
+    now = time.time()
+    changed = (not previous) or current != previous or entry.get("physical_status") != "in"
+    cooldown_ok = now - float(entry.get("physical_last_alert", 0) or 0) >= PHYSICAL_ALERT_COOLDOWN
+
+    if current and changed and cooldown_ok:
+        where = "\n".join(f"🟢 {store} : STOCK DÉTECTÉ" for store in current)
         notify(
             f"🏬 Stock magasin Lyon : {result['name']}",
-            _physical_alert_body(result),
+            f"🏬 STOCK MAGASIN DÉTECTÉ — {result['name']}\nZone : {PHYSICAL_STORE_RADIUS_LABEL}\n{where}\n{result['url']}",
             priority="5",
-            tags="shopping_cart,department_store",
+            tags="shopping_cart",
         )
+        entry["physical_last_alert"] = now
     entry["physical_status"] = result.get("physical_status")
     entry["physical_stores"] = list(current)
-    entry["physical_checked_at"] = result.get("physical_checked_at", time.time())
+    entry["physical_checked_at"] = result.get("physical_checked_at", now)
+
+# ---------------------------------------------------------------------------
+# DECOUVERTE DE NOUVEAUX PRODUITS (SITEMAP XML)
+# ---------------------------------------------------------------------------
+
+def _extract_sitemap_urls(base_url: str) -> list[str]:
+    host = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
+    robots_url = host.rstrip("/") + "/robots.txt"
+    urls = []
+    try:
+        text = fetch(robots_url)
+        for line in text.splitlines():
+            if line.lower().startswith("sitemap:"):
+                u = line.split(":", 1)[1].strip()
+                if u.startswith("http"): urls.append(u)
+    except Exception:
+        pass
+    if not urls:
+        urls = [host.rstrip("/") + "/sitemap.xml"]
+    return list(dict.fromkeys(urls))[:5]
+
+def _parse_sitemap(xml: str) -> list[str]:
+    return re.findall(r"<loc>\s*(https?://[^<\s]+)\s*</loc>", xml, re.I)
+
+def discover_new_products(products: list[dict]) -> list[dict]:
+    if not DISCOVERY_ENABLED:
+        return []
+
+    discovered = []
+    known_hosts = set(urlparse(p["url"]).netloc.lower() for p in products)
+    known_urls = set(p["url"].rstrip("/") for p in products)
+
+    for host in known_hosts:
+        base_url = f"https://{host}"
+        sitemap_urls = _extract_sitemap_urls(base_url)
+        for sitemap in sitemap_urls:
+            try:
+                xml = fetch(sitemap)
+                urls = _parse_sitemap(xml)
+                for u in urls:
+                    clean_u = u.rstrip("/")
+                    if clean_u in known_urls:
+                        continue
+                    low_u = u.lower()
+                    if any(k in low_u for k in DISCOVERY_KEYWORDS):
+                        try:
+                            html = fetch(u)
+                            title = _product_title(html, u)
+                            if is_relevant_pokemon_candidate(title, u) or is_relevant_onepiece_candidate(title, u):
+                                price = extract_price(html)
+                                if price:
+                                    item = {"name": title, "url": clean_u, "reference_price": price}
+                                    discovered.append(item)
+                                    known_urls.add(clean_u)
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
+    if discovered and AUTO_ADD_DISCOVERED:
+        additions = [f"{item['name']} | {item['url']} | {item['reference_price']:.2f}" for item in discovered]
+        current = PRODUCTS_FILE.read_text(encoding="utf-8-sig") if PRODUCTS_FILE.exists() else ""
+        PRODUCTS_FILE.write_text(current.rstrip() + "\n" + "\n".join(additions) + "\n", encoding="utf-8")
+        print(f"+ {len(additions)} produit(s) découvert(s) via Sitemap et ajouté(s) à products.txt")
+
+    return discovered
+
+def _product_title(html: str, fallback_url: str) -> str:
+    for pat in (
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',
+        r'<title[^>]*>\s*([^<]+?)\s*</title>',
+    ):
+        m = re.search(pat, html, re.I | re.S)
+        if m:
+            title = re.sub(r"\s+", " ", m.group(1)).strip()
+            if title: return title[:180]
+    return urlparse(fallback_url).path.rstrip("/").split("/")[-1].replace("-", " ")[:180]
+
+# ---------------------------------------------------------------------------
+# CYCLE RUNNER
+# ---------------------------------------------------------------------------
 
 def check_one(product: dict) -> dict:
-    result = {
-        **product,
-        "status": None,
-        "source": None,
-        "price": None,
-        "error": None,
-        "http_status": None,
-        "physical_status": None,
-        "physical_stores": [],
-        "physical_checked_at": 0,
-    }
-
+    result = {**product, "status": None, "source": None, "price": None, "error": None, "http_status": None, "physical_status": None, "physical_stores": [], "physical_checked_at": 0}
     try:
         html = fetch(product["url"])
         result["status"], result["source"] = classify(html)
-
         if PRICE_FILTER_ENABLED:
             result["price"] = extract_price(html)
         if PHYSICAL_STOCK_ENABLED:
@@ -903,15 +796,10 @@ def check_one(product: dict) -> dict:
         result["error"] = str(exc)
         result["http_status"] = exc.status_code
     except Exception as exc:
-        result["error"] = (
-            f"erreur inattendue ({exc.__class__.__name__}: {str(exc)[:80]})"
-        )
+        result["error"] = f"erreur inattendue ({exc.__class__.__name__}: {str(exc)[:80]})"
     return result
 
 def due(product, entry, now):
-    # Premier passage immédiat.
-    if not entry.get("next_check"):
-        return True
     return now >= float(entry.get("next_check", 0))
 
 def schedule_next(entry, result, now):
@@ -919,14 +807,10 @@ def schedule_next(entry, result, now):
     http_status = result.get("http_status")
     errors = int(entry.get("errors", 0))
 
-    if http_status == 429:
-        entry["cooldown_until"] = now + COOLDOWN_429
-        entry["next_check"] = now + COOLDOWN_429
-        return
-
-    if http_status == 403:
-        entry["cooldown_until"] = now + COOLDOWN_403
-        entry["next_check"] = now + COOLDOWN_403
+    if http_status in (429, 403):
+        cooldown = COOLDOWN_429 if http_status == 429 else COOLDOWN_403
+        entry["cooldown_until"] = now + cooldown
+        entry["next_check"] = now + cooldown
         return
 
     if result.get("error"):
@@ -936,22 +820,22 @@ def schedule_next(entry, result, now):
     else:
         entry["errors"] = 0
         entry["cooldown_until"] = 0
-
-        # Produit dispo ou récemment disponible = surveillance renforcée.
-        if status in ("in", "preorder"):
-            interval = PRIORITY_INTERVAL
-        elif entry.get("alerted"):
+        drop_hay = f"{entry.get('name', '')} {entry.get('url', '')}".lower()
+        if any(term in drop_hay for term in DROP_PRIORITY_TERMS):
+            interval = DROP_PRIORITY_INTERVAL
+        elif status in ("in", "preorder") or entry.get("alerted"):
             interval = PRIORITY_INTERVAL
         else:
             interval = DEFAULT_INTERVAL
 
     jitter = random.uniform(-0.10, 0.10) * interval
-    interval = max(MIN_INTERVAL, int(interval + jitter))
-    entry["next_check"] = now + interval
+    entry["next_check"] = now + max(MIN_INTERVAL, int(interval + jitter))
 
 def process_result(state, result):
     url = result["url"]
     entry = state["products"].setdefault(url, new_entry())
+    entry["name"] = result.get("name", entry.get("name", ""))
+    entry["url"] = url
     now = time.time()
 
     if result["error"]:
@@ -962,39 +846,12 @@ def process_result(state, result):
         schedule_next(entry, result, now)
         return
 
-    if entry["problem_alerted"]:
-        notify(
-            "Bot Pokémon : site de nouveau lisible",
-            result["name"],
-            result["url"],
-            priority="2",
-            tags="white_check_mark",
-        )
-
     entry["problem_since"] = 0
-    entry["problem_alerted"] = False
-    entry["last_http_status"] = 200
     entry["status"] = result["status"]
     entry["last_price"] = result["price"]
 
-    # Stock magasin local : indépendant du stock en ligne et du filtre prix.
     maybe_notify_physical(state, result)
 
-    labels = {
-        "in": "EN STOCK",
-        "preorder": "PRÉCOMMANDE",
-        "out": "épuisé",
-        "blocked": "BLOQUÉ",
-        "unknown": "INCONNU",
-    }
-    label = labels.get(result["status"], result["status"])
-    price_txt = (
-        f" | prix {result['price']:.2f} €"
-        if result["price"] is not None else ""
-    )
-    print(f"- {result['name']}: {label} [{result['source']}]{price_txt}")
-
-    # Prix: aucune alerte si le prix est inconnu ou trop élevé.
     price_ok = True
     if PRICE_FILTER_ENABLED:
         if result["price"] is None:
@@ -1003,74 +860,23 @@ def process_result(state, result):
             ceiling = accepted_price(result["reference_price"])
             price_ok = result["price"] <= ceiling
 
-            if not price_ok:
-                entry["alerted"] = False
-                entry["weak_hits"] = 0
-                print(
-                    f"  -> prix refusé: {result['price']:.2f} € > "
-                    f"plafond {ceiling:.2f} €"
-                )
-                schedule_next(entry, result, now)
-                return
+    available = result["status"] == "in" or (result["status"] == "preorder" and ALERT_ON_PREORDER)
 
-    available = (
-        result["status"] == "in" or
-        (result["status"] == "preorder" and ALERT_ON_PREORDER)
-    )
-
-    if not available or not price_ok:
-        entry["alerted"] = False
-        entry["weak_hits"] = 0
-        schedule_next(entry, result, now)
-        return
-
-    # Détection faible: confirmation sur deux lectures.
-    if result["source"] == "keywords":
-        entry["weak_hits"] = int(entry.get("weak_hits", 0)) + 1
-        if entry["weak_hits"] < WEAK_CONFIRMATIONS:
-            print("  ... détection faible, confirmation au prochain passage")
-            schedule_next(entry, result, now)
-            return
-
-    if not entry["alerted"]:
-        ceiling = accepted_price(result["reference_price"])
-        price_text = (
-            f"Prix détecté : {result['price']:.2f} €\n"
-            f"Prix normal : {result['reference_price']:.2f} €\n"
-            f"Plafond +{PRICE_TOLERANCE_PCT:g}% : {ceiling:.2f} €"
-            if PRICE_FILTER_ENABLED else
-            "Filtre prix désactivé."
-        )
-        title = (
-            f"Stock dispo : {result['name']}"
-            if result["status"] == "in"
-            else f"Précommande : {result['name']}"
-        )
-        message = (
-            f"{result['name']}\n\n"
-            f"{price_text}\n\n"
-            f"{result['url']}\n\n"
-            f"Source stock : {result['source']}"
-        )
-        if notify(title, message, result["url"], priority="5",
-                  tags="rotating_light"):
+    if available and price_ok and not entry["alerted"]:
+        title = f"Stock dispo : {result['name']}" if result["status"] == "in" else f"Précommande : {result['name']}"
+        msg = f"{result['name']}\nPrix : {result['price']} €\n{result['url']}"
+        if notify(title, msg, result["url"]):
             entry["alerted"] = True
 
     schedule_next(entry, result, now)
 
-
 def run_due(state, products, deadline):
     now = time.time()
-    due_products = [
-        p for p in products
-        if due(p, state["products"].setdefault(p["url"], new_entry()), now)
-    ]
+    due_products = [p for p in products if due(p, state["products"].setdefault(p["url"], new_entry()), now)]
 
     if not due_products:
         return 0, 0, 0
 
-    # Regroupement par domaine: parallélisme entre magasins,
-    # délai conservateur à l'intérieur d'un même domaine.
     groups = {}
     for product in due_products:
         host = urlparse(product["url"]).netloc.lower()
@@ -1087,638 +893,85 @@ def run_due(state, products, deadline):
             local.append(check_one(product))
         return local
 
-    workers = max(1, min(MAX_WORKERS, len(groups)))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(worker, group) for group in groups.values()]
+    with ThreadPoolExecutor(max_workers=max(1, min(MAX_WORKERS, len(groups)))) as pool:
+        futures = [pool.submit(worker, g) for g in groups.values()]
         for future in as_completed(futures):
-            try:
-                results.extend(future.result())
-            except Exception as exc:
-                print(f"! groupe de vérification en erreur: {exc}")
+            results.extend(future.result())
 
-    checked = 0
-    available = 0
-    errors = 0
-    for result in results:
+    checked, available, errors = 0, 0, 0
+    for r in results:
         checked += 1
-        if result.get("error"):
-            errors += 1
-        elif result.get("status") in ("in", "preorder"):
-            available += 1
-        process_result(state, result)
+        if r.get("error"): errors += 1
+        elif r.get("status") in ("in", "preorder"): available += 1
+        process_result(state, r)
 
     return checked, available, errors
 
-def safe_cycle(state, products):
-    try:
-        started = time.monotonic()
-        checked, available, errors = run_due(
-            state, products, started + RUN_DEADLINE
-        )
-        save_state(state)
-        if checked:
-            print(
-                f"[{datetime.now():%H:%M:%S}] "
-                f"{checked} vérif(s), {available} dispo(s), "
-                f"{errors} erreur(s), {time.monotonic()-started:.1f}s"
-            )
-    except Exception:
-        trace = traceback.format_exc()
-        print(trace)
-        if time.time() - state.get("last_crash_alert", 0) >= ALERT_COOLDOWN_HOURS * 3600:
-            notify(
-                "Bot Pokémon : erreur interne",
-                trace[-1200:],
-                priority="4",
-                tags="warning",
-            )
-            state["last_crash_alert"] = time.time()
-        save_state(state)
-
-# ---------------------------------------------------------------------------
-# AUTO-DISCOVERY DES NOUVEAUX PRODUITS
-# ---------------------------------------------------------------------------
-
-DISCOVERY_KEYWORDS = (
-    "pokemon", "pokémon", "one-piece", "onepiece", "one_piece",
-    "op-", "op17", "op18", "eb-", "eb05", "display", "booster",
-    "etb", "coffret", "bundle", "blister", "pack", "box",
-)
-
-# Sorties futures à surveiller explicitement. Cela évite de dépendre uniquement
-# de requêtes génériques lorsque le nom commercial vient juste d'apparaître.
-DISCOVERY_WATCH_TERMS = (
-    "OP-18", "OP18", "The Dominance of God",
-    "EB-05", "Heroines Edition Vol. 2",
-    "30e Anniversaire", "30th Celebration", "30 ans",
-    "Storm Emerald", "Storm Emerald M6",
-)
-
-
-def _extract_sitemap_urls(base_url: str) -> list[str]:
-    """Trouve les sitemaps déclarés par robots.txt, puis extrait leurs URLs."""
-    host = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
-    robots_url = host.rstrip("/") + "/robots.txt"
-    urls = []
-    try:
-        text = fetch(robots_url)
-        for line in text.splitlines():
-            if line.lower().startswith("sitemap:"):
-                u = line.split(":", 1)[1].strip()
-                if u.startswith("http"):
-                    urls.append(u)
-    except Exception:
-        pass
-    if not urls:
-        urls = [host.rstrip("/") + "/sitemap.xml"]
-    return list(dict.fromkeys(urls))[:5]
-
-
-def _parse_sitemap(xml: str) -> list[str]:
-    # Suffisant pour sitemap.xml et sitemap-index sans dépendance XML externe.
-    return re.findall(r"<loc>\s*(https?://[^<\s]+)\s*</loc>", xml, re.I)
-
-
-def _discovery_candidate(url: str) -> bool:
-    low = urllib.parse.unquote(url).lower()
-    return any(k in low for k in DISCOVERY_KEYWORDS)
-
-
-def _product_title(html: str, fallback_url: str) -> str:
-    for pat in (
-        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',
-        r'<title[^>]*>\s*([^<]+?)\s*</title>',
-        r'"name"\s*:\s*"([^"\\]{3,180})"',
-    ):
-        m = re.search(pat, html, re.I | re.S)
-        if m:
-            title = re.sub(r"\s+", " ", m.group(1)).strip()
-            if title:
-                return title[:180]
-    return urllib.parse.unquote(urlparse(fallback_url).path.rstrip("/").split("/")[-1]).replace("-", " ")[:180]
-
-
-def _load_discovered_urls() -> set[str]:
-    seen = set()
-    if DISCOVERY_FILE.exists():
-        try:
-            for line in DISCOVERY_FILE.read_text(encoding="utf-8").splitlines():
-                if "|" in line and not line.lstrip().startswith("#"):
-                    parts = [x.strip() for x in line.split("|")]
-                    if len(parts) >= 2:
-                        seen.add(parts[1])
-        except OSError:
-            pass
-    return seen
-
-
-
-# ---------------------------------------------------------------------------
-# PRIX DE RÉFÉRENCE : ENSEIGNE UNIQUEMENT
-# ---------------------------------------------------------------------------
-
-def _seller_matches_retailer(seller, retailer: str) -> bool:
-    if not seller:
-        return False
-    low = _norm(seller)
-    wanted = _norm(retailer)
-    aliases = {
-        "fnac": {"fnac", "fnaccom"},
-        "carrefour": {"carrefour", "carrefourfr"},
-        "auchan": {"auchan", "auchanfr"},
-        "cultura": {"cultura", "culturacom"},
-        "kingjouet": {"kingjouet", "kingjouetcom"},
-        "smythstoys": {"smythstoys", "smythstoyscom"},
-        "joueclub": {"joueclub", "joueclubfr"},
-        "lagranderecre": {"lagranderecre", "lagranderecrefr"},
-        "micromania": {"micromania", "micromaniafr"},
-    }
-    return low == wanted or low in aliases.get(wanted, {wanted})
-
-
-def _official_retailer_prices(html: str, retailer: str) -> list[float]:
-    """Retourne uniquement les prix d'offres dont le vendeur est l'enseigne.
-
-    Si une page ne fournit aucun vendeur structuré, on considère son prix comme
-    direct-enseigne (cas fréquent des fiches sans marketplace). Dès qu'une offre
-    structurée comporte un vendeur, seules les offres explicitement attribuées à
-    l'enseigne sont retenues.
-    """
-    prices = []
-    structured_offers = False
-    for data in _ld_nodes(html):
-        for node in _walk(data):
-            if not isinstance(node, dict):
-                continue
-            offers = node.get("offers")
-            if isinstance(offers, dict):
-                offers = [offers]
-            if not isinstance(offers, list):
-                continue
-            for offer in offers:
-                if not isinstance(offer, dict) or offer.get("price") is None:
-                    continue
-                seller = offer.get("seller")
-                seller_name = seller.get("name") if isinstance(seller, dict) else seller if isinstance(seller, str) else None
-                if seller_name:
-                    structured_offers = True
-                    if _seller_matches_retailer(seller_name, retailer):
-                        value = parse_price(offer.get("price"))
-                        if value is not None and value > 0:
-                            prices.append(value)
-                else:
-                    value = parse_price(offer.get("price"))
-                    if value is not None and value > 0:
-                        prices.append(value)
-    if prices:
-        return prices
-    if structured_offers:
-        # La page expose des vendeurs mais aucun n'est l'enseigne : marketplace
-        # uniquement, donc surtout ne pas utiliser son prix comme référence.
-        return []
-    fallback = extract_price(html)
-    return [fallback] if fallback is not None and fallback > 0 else []
-
-
-def _reference_price_from_retailer(html: str, retailer: str):
-    prices = _official_retailer_prices(html, retailer)
-    if not prices:
-        return None
-    # S'il y a plusieurs offres directes de l'enseigne, le prix le plus bas est
-    # le seuil réellement affiché par cette enseigne, sans prendre un vendeur tiers.
-    return min(prices)
-
-
-
-
-def _extract_gtin_candidates(html: str) -> list[str]:
-    """Extrait des EAN/GTIN-13 visibles dans les données structurées de la fiche."""
-    vals = []
-    patterns = [
-        r'"(?:gtin13|gtin|ean)"\s*:\s*"?(\d{13})',
-        r'\b(\d{13})\b',
-    ]
-    for pat in patterns:
-        for m in re.finditer(pat, html, re.I):
-            v = m.group(1)
-            if v not in vals:
-                vals.append(v)
-            if len(vals) >= 5:
-                return vals
-    return vals
-
-def _candidate_product_queries(name: str, html: str) -> list[str]:
-    """Construit des recherches assez strictes pour retrouver le même produit."""
-    qs = []
-    for ean in _extract_gtin_candidates(html):
-        qs.append(ean)
-    title = _product_title(html, "")
-    if title:
-        # Nettoyage des mentions de boutique pour ne pas biaiser la recherche.
-        clean = re.sub(r"^(?:[^|]+\s-\s)+", "", title).strip()
-        qs.append('"' + clean[:120] + '"')
-    if name:
-        clean_name = re.sub(r"^[^|]+\s-\s", "", name).strip()
-        if clean_name:
-            qs.append('"' + clean_name[:120] + '"')
-    return list(dict.fromkeys(qs))
-
-def _find_official_price_for_product(name: str, source_url: str, source_html: str):
-    """Cherche le prix enseigne officiel du même produit dans les grandes enseignes."""
-    prices = []
-    seen_urls = set()
-    queries = _candidate_product_queries(name, source_html)
-    for domain, (retailer, _families) in DISCOVERY_RETAILERS.items():
-        for base_query in queries[:3]:
-            query = f'site:{domain} {base_query}'
-            for url in _search_engine_urls(query)[:SEARCH_RESULTS_PER_QUERY]:
-                parsed = urlparse(url)
-                if parsed.netloc.lower().split(":")[0].lstrip("www.") != domain:
-                    continue
-                clean = url.rstrip("/")
-                if clean in seen_urls or any(x in parsed.path.lower() for x in ("/search", "/recherche", "/account", "/login", "/panier", "/cart")):
-                    continue
-                seen_urls.add(clean)
-                try:
-                    html = _fetch_once(url)
-                except Exception:
-                    continue
-                title = _product_title(html, url).lower()
-                # Une correspondance EAN est idéale. À défaut, exige plusieurs
-                # éléments du nom pour éviter de confondre deux coffrets proches.
-                src_title = _product_title(source_html, source_url).lower()
-                tokens = [t for t in re.findall(r"[a-z0-9éèêàùûôîïç]+", src_title) if len(t) >= 4]
-                overlap = sum(1 for t in set(tokens) if t in title)
-                ean_match = bool(set(_extract_gtin_candidates(source_html)) & set(_extract_gtin_candidates(html)))
-                if not ean_match and overlap < 3:
-                    continue
-                price = _reference_price_from_retailer(html, retailer)
-                if price is not None:
-                    prices.append((price, retailer, clean))
-    if not prices:
-        return None
-    return min(prices, key=lambda x: x[0])
-
-def refresh_existing_reference_prices(products: list[dict]) -> int:
-    """Recalcule les prix de référence à partir des grandes enseignes uniquement."""
-    if not AUTO_REFRESH_PRICES:
-        return 0
-    changed = 0
-    rows = []
-    try:
-        text = PRODUCTS_FILE.read_text(encoding="utf-8-sig")
-    except OSError:
-        return 0
-    product_by_url = {p["url"].rstrip("/"): p for p in products}
-    for raw in text.splitlines():
-        line = raw.strip()
-        m = LINE_RE.match(line) if line and not line.startswith("#") else None
-        if not m:
-            rows.append(raw)
-            continue
-        name, url, old_price = m.group(1).strip(), m.group(2).strip(), parse_price(m.group(3))
-        if old_price is None:
-            rows.append(raw); continue
-        # Ne cherche le prix de référence que pour Pokémon / One Piece.
-        if not re.search(r"pokemon|pokémon|one[ -]?piece|op-\d+|eb-\d+", name + " " + url, re.I):
-            rows.append(raw); continue
-        try:
-            source_html = _fetch_once(url)
-            found = _find_official_price_for_product(name, url, source_html)
-        except Exception:
-            found = None
-        if found is None:
-            rows.append(raw)
-            continue
-        new_price, retailer, matched_url = found
-        if abs(new_price - old_price) >= 0.01:
-            rows.append(f"{name} | {url} | {new_price:.2f}")
-            changed += 1
-            print(f"~ prix référence mis à jour: {name} : {old_price:.2f} -> {new_price:.2f} ({retailer})")
-        else:
-            rows.append(raw)
-    if changed:
-        try:
-            PRODUCTS_FILE.write_text("\n".join(rows) + "\n", encoding="utf-8")
-        except OSError as exc:
-            print(f"! impossible d'écrire les nouveaux prix: {exc}")
-            return 0
-    return changed
-
-def _append_products_txt(items: list[dict]) -> int:
-    """Ajoute les nouvelles fiches validées directement dans products.txt."""
-    if not items:
-        return 0
+def purge_obsolete_products() -> int:
     try:
         current = PRODUCTS_FILE.read_text(encoding="utf-8-sig")
     except OSError:
-        current = ""
-    existing_urls = set()
-    for line in current.splitlines():
-        m = LINE_RE.match(line.strip())
-        if m:
-            existing_urls.add(m.group(2).rstrip("/"))
-    additions = []
-    for item in items:
-        url = item["url"].rstrip("/")
-        price = item.get("reference_price")
-        if not url or price is None or url in existing_urls:
+        return 0
+
+    kept, removed = [], 0
+    for raw in current.splitlines():
+        line = raw.strip()
+        m = LINE_RE.match(line) if line and not line.startswith("#") else None
+        if not m:
+            kept.append(raw)
             continue
-        additions.append(f'{item["name"]} | {url} | {price:.2f}')
-        existing_urls.add(url)
-    if not additions:
-        return 0
-    sep = "\n" if current and not current.endswith("\n") else ""
-    try:
-        PRODUCTS_FILE.write_text(current + sep + "\n# Produits découverts automatiquement — prix enseigne\n" + "\n".join(additions) + "\n", encoding="utf-8")
-        return len(additions)
-    except OSError as exc:
-        print(f"! impossible d'ajouter automatiquement à products.txt: {exc}")
-        return 0
+
+        name, url = m.group(1).strip(), m.group(2).strip()
+        if any(term in f"{name} {url}".lower() for term in PURGE_PRODUCT_TERMS):
+            removed += 1
+            continue
+        kept.append(raw)
+
+    if removed:
+        PRODUCTS_FILE.write_text("\n".join(kept).rstrip() + "\n", encoding="utf-8")
+    return removed
 
 # ---------------------------------------------------------------------------
-# RECHERCHE GOOGLE / BING + GRANDES ENSEIGNES
+# MAIN CLI
 # ---------------------------------------------------------------------------
-
-DISCOVERY_RETAILERS = {
-    "fnac.com": ("Fnac", ("Pokémon", "One Piece")),
-    "carrefour.fr": ("Carrefour", ("Pokémon", "One Piece")),
-    "auchan.fr": ("Auchan", ("Pokémon", "One Piece")),
-    "cultura.com": ("Cultura", ("Pokémon", "One Piece")),
-    "king-jouet.com": ("King Jouet", ("Pokémon", "One Piece")),
-    "smythstoys.com": ("Smyths Toys", ("Pokémon", "One Piece")),
-    "joueclub.fr": ("JouéClub", ("Pokémon", "One Piece")),
-    "lagranderecre.fr": ("La Grande Récré", ("Pokémon", "One Piece")),
-    "micromania.fr": ("Micromania", ("Pokémon", "One Piece")),
-}
-
-
-def _search_result_urls_google(query: str) -> list[str]:
-    url = "https://www.google.com/search?" + urllib.parse.urlencode({
-        "q": query, "num": SEARCH_RESULTS_PER_QUERY, "hl": "fr", "gl": "fr",
-    })
-    try:
-        text = _fetch_once(url)
-    except Exception:
-        return []
-    found = []
-    # Google utilise plusieurs variantes de liens selon la page retournée.
-    for m in re.finditer(r'href=["\'](/url\?q=|)(https?://[^"\'&<>]+)', text, re.I):
-        u = html_lib.unescape(m.group(2))
-        if u not in found:
-            found.append(u)
-    # Variante /url?q=...&sa=...
-    for m in re.finditer(r'href=["\']/url\?q=([^&"\']+)', text, re.I):
-        u = urllib.parse.unquote(html_lib.unescape(m.group(1)))
-        if u.startswith("http") and u not in found:
-            found.append(u)
-    return found[:SEARCH_RESULTS_PER_QUERY * 2]
-
-
-def _search_result_urls_bing(query: str) -> list[str]:
-    url = "https://www.bing.com/search?" + urllib.parse.urlencode({
-        "q": query, "count": SEARCH_RESULTS_PER_QUERY, "setlang": "fr-FR",
-    })
-    try:
-        text = _fetch_once(url)
-    except Exception:
-        return []
-    found = []
-    for m in re.finditer(r'<li[^>]*class=["\'][^"\']*b_algo[^"\']*["\'][\s\S]*?<h2[^>]*>\s*<a[^>]+href=["\']([^"\']+)', text, re.I):
-        u = html_lib.unescape(m.group(1))
-        if u.startswith("http") and u not in found:
-            found.append(u)
-    return found[:SEARCH_RESULTS_PER_QUERY * 2]
-
-
-def _search_engine_urls(query: str) -> list[str]:
-    urls = []
-    engines = []
-    if SEARCH_ENGINE in ("google", "both"):
-        engines.append(_search_result_urls_google)
-    if SEARCH_ENGINE in ("bing", "both"):
-        engines.append(_search_result_urls_bing)
-    for engine in engines:
-        urls.extend(engine(query))
-    return list(dict.fromkeys(urls))
-
-
-def discover_via_search_engines(products: list[dict]) -> list[dict]:
-    """Découvre et active automatiquement les nouveautés chez les grandes enseignes.
-
-    Aucune notification de découverte n'est envoyée. Une fiche n'est ajoutée à
-    products.txt que si son prix peut être rattaché à l'enseigne elle-même, et non
-    à un vendeur marketplace. Le prix ainsi obtenu devient la référence du produit;
-    le filtre habituel +10 % décide ensuite si une alerte de disponibilité part.
-    """
-    if not SEARCH_DISCOVERY_ENABLED or not AUTO_ADD_DISCOVERED:
-        return []
-
-    known = {p["url"].rstrip("/") for p in products}
-    discovered = []
-
-    for domain, (retailer, families) in DISCOVERY_RETAILERS.items():
-        queries = [
-            f'site:{domain} (pokemon OR pokémon) ("30e Anniversaire" OR "30th Celebration" OR "30 ans" OR "Storm Emerald" OR "Storm Emerald M6")',
-            f'site:{domain} ("One Piece" OR OP-18 OR OP18 OR EB-05 OR EB05 OR "Heroines Edition") (précommande OR acheter OR stock OR display OR booster)',
-            f'site:{domain} "{families[0]}" (booster OR display OR coffret OR ETB OR pack OR box)',
-            f'site:{domain} "{families[1]}" (booster OR display OR coffret OR ETB OR pack OR box)',
-        ]
-
-        for query in queries[:max(SEARCH_QUERIES_PER_HOST + 1, 6)]:
-            for url in _search_engine_urls(query):
-                parsed = urlparse(url)
-                if parsed.netloc.lower().split(":")[0].lstrip("www.") != domain:
-                    continue
-                clean = url.rstrip("/")
-                if clean in known:
-                    continue
-                path = parsed.path.lower()
-                if any(x in path for x in ("/search", "/recherche", "/account", "/login", "/panier", "/cart")):
-                    continue
-                try:
-                    html = _fetch_once(url)
-                except Exception:
-                    continue
-                title = _product_title(html, url)
-                low = (title + " " + url).lower()
-                if not ("pokemon" in low or "pokémon" in low or "one piece" in low or "one-piece" in low):
-                    continue
-                if not any(x in low for x in ("booster", "display", "coffret", "etb", "pack", "box", "deck")):
-                    continue
-
-                reference_price = _reference_price_from_retailer(html, retailer)
-                if reference_price is None:
-                    # Pas de prix fiable vendu par l'enseigne elle-même : on ignore
-                    # la fiche pour éviter d'apprendre un prix marketplace/spéculatif.
-                    continue
-                status, source = classify(html)
-                item = {
-                    "name": f"{retailer} - {title}",
-                    "url": clean,
-                    "reference_price": reference_price,
-                    "reference_source": retailer,
-                    "price": reference_price,
-                    "status": status,
-                    "source": source,
-                }
-                discovered.append(item)
-                known.add(clean)
-
-    if not discovered:
-        return []
-
-    added = _append_products_txt(discovered)
-    if added:
-        # Les produits seront repris dans la liste active au tour suivant.
-        print(f"+ {added} nouveau(x) produit(s) ajouté(s) automatiquement à products.txt")
-    return discovered
-
-def discover_new_products(products: list[dict]) -> list[dict]:
-    """Compatibilité historique : la découverte active passe par Google/Bing.
-
-    Les sitemaps de boutiques spécialisées ne servent plus à définir un prix de
-    référence. Cela évite qu'un prix élevé d'un revendeur soit appris comme prix
-    normal. Les grandes enseignes sont traitées par discover_via_search_engines().
-    """
-    return []
-
-# ---------------------------------------------------------------------------
-# CLI
 
 def main():
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-
-    parser = argparse.ArgumentParser(
-        description="Surveillance de stock Pokémon / One Piece avec filtre prix."
-    )
-    parser.add_argument("--once", action="store_true",
-                        help="vérifie uniquement les produits arrivés à échéance")
-    parser.add_argument("--fast", action="store_true",
-                        help="surveillance rapide pendant quelques minutes")
-    parser.add_argument("--duration", type=int, default=300,
-                        help="durée de --fast en secondes")
-    parser.add_argument("--interval", type=int, default=20,
-                        help="intervalle de base du mode --fast")
-    parser.add_argument("--test", action="store_true",
-                        help="teste ntfy")
-    parser.add_argument("--physical", action="store_true",
-                        help="force un scan des fiches pour détecter le stock magasin Lyon")
+    parser = argparse.ArgumentParser(description="Bot de surveillance Pokémon/One Piece TCG.")
+    parser.add_argument("--once", action="store_true", help="vérification unique")
+    parser.add_argument("--test", action="store_true", help="test ntfy")
     args = parser.parse_args()
 
     if args.test:
-        sys.exit(0 if notify(
-            "Test bot Pokémon",
-            "Les notifications ntfy fonctionnent.",
-            priority="3",
-            tags="white_check_mark",
-        ) else 1)
+        sys.exit(0 if notify("Test bot", "Notifications fonctionnelles.") else 1)
 
-    if args.physical:
-        try:
-            products = load_products()
-        except RuntimeError as exc:
-            print(f"! {exc}")
-            sys.exit(2)
-        state = load_state()
-        for product in products:
-            state["products"].setdefault(product["url"], new_entry())["next_check"] = 0
-        safe_cycle(state, products)
-        return
-
-    try:
-        products = load_products()
-    except RuntimeError as exc:
-        print(f"! {exc}")
-        sys.exit(2)
-
+    purge_obsolete_products()
+    products = load_products()
     state = load_state()
 
-    # Recalcule périodiquement les prix de référence à partir des grandes
-    # enseignes uniquement. Aucun prix Marketplace/spécialiste n'est utilisé.
-    last_price_refresh = state.get("last_price_refresh", 0)
-    if AUTO_REFRESH_PRICES and (time.time() - last_price_refresh >= PRICE_REFRESH_HOURS * 3600 or args.once):
-        try:
-            refresh_existing_reference_prices(products)
-            products[:] = load_products()
-            state["last_price_refresh"] = time.time()
-            save_state(state)
-        except Exception as exc:
-            print(f"! recalcul des prix de référence en erreur: {exc}")
-
-    # Découverte automatique au démarrage. Les nouvelles fiches validées par une
-    # grande enseigne sont ajoutées directement à products.txt, sans notification
-    # de découverte. Les notifications restent réservées aux disponibilités au
-    # prix de référence autorisé.
     if DISCOVERY_ENABLED:
         try:
             discover_new_products(products)
-            if SEARCH_DISCOVERY_ENABLED:
-                discover_via_search_engines(products)
-                products[:] = load_products()
-            # Les fiches découvertes avec précommande/stock sont immédiatement
-            # reprises par le scheduler au tour suivant, sans notification de
-            # "découverte" : seule la notification de disponibilité est envoyée.
-            state["last_discovery"] = time.time()
-            save_state(state)
+            products = load_products()
         except Exception as exc:
-            print(f"! découverte automatique en erreur: {exc}")
+            print(f"! Erreur lors de la découverte : {exc}")
 
-    if args.once:
-        # --once ignore le scheduler pour vérifier tout le fichier.
-        for product in products:
-            state["products"].setdefault(product["url"], new_entry())["next_check"] = 0
-        safe_cycle(state, products)
-        return
-
-    if args.fast:
-        end = time.monotonic() + max(30, args.duration)
-        while time.monotonic() < end:
-            # En mode rapide, on force les produits à être dus à chaque tour.
-            for product in products:
-                entry = state["products"].setdefault(product["url"], new_entry())
-                entry["next_check"] = 0
-            safe_cycle(state, products)
-            if DISCOVERY_ENABLED and time.time() - state.get("last_discovery", 0) >= min(DISCOVERY_EVERY, 300):
-                try:
-                    discover_new_products(products)
-                    if SEARCH_DISCOVERY_ENABLED:
-                        discover_via_search_engines(products)
-                        products[:] = load_products()
-                    state["last_discovery"] = time.time()
-                    save_state(state)
-                except Exception as exc:
-                    print(f"! découverte automatique en erreur: {exc}")
-            time.sleep(max(MIN_INTERVAL, args.interval) + random.uniform(0, 3))
-        print("Mode rapide terminé.")
-        return
-
-    print(
-        "Bot lancé — prix de référence + "
-        f"{PRICE_TOLERANCE_PCT:g}% | {len(products)} produits."
-    )
-    print("Ctrl+C pour arrêter.")
-
+    print(f"Bot lancé avec {len(products)} produits surveillés.")
     try:
+        last_discovery = time.time()
         while True:
-            safe_cycle(state, products)
-            if DISCOVERY_ENABLED and time.time() - state.get("last_discovery", 0) >= DISCOVERY_EVERY:
-                try:
-                    discover_new_products(products)
-                    if SEARCH_DISCOVERY_ENABLED:
-                        discover_via_search_engines(products)
-                        products[:] = load_products()
-                    state["last_discovery"] = time.time()
-                    save_state(state)
-                except Exception as exc:
-                    print(f"! découverte automatique en erreur: {exc}")
+            run_due(state, products, time.monotonic() + RUN_DEADLINE)
+            save_state(state)
+
+            if DISCOVERY_ENABLED and (time.time() - last_discovery) >= DISCOVERY_EVERY:
+                discover_new_products(products)
+                products = load_products()
+                last_discovery = time.time()
+
+            if args.once:
+                break
             time.sleep(3)
     except KeyboardInterrupt:
-        print("\nArrêt.")
+        print("\nArrêt du bot.")
 
 if __name__ == "__main__":
     main()
