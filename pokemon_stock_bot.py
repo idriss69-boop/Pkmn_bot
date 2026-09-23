@@ -12,6 +12,7 @@ Aucune commande ni achat automatique n'est effectué.
 """
 
 import argparse
+import html as html_lib
 import http.client
 import json
 import os
@@ -71,6 +72,19 @@ ALERT_COOLDOWN_HOURS = int(os.environ.get("ALERT_COOLDOWN_HOURS", "6"))
 BASE_DIR = Path(__file__).resolve().parent
 PRODUCTS_FILE = BASE_DIR / "products.txt"
 STATE_FILE = BASE_DIR / "stock_state.json"
+DISCOVERY_FILE = BASE_DIR / "discovered_products.txt"
+AUTO_ADD_DISCOVERED = os.environ.get("AUTO_ADD_DISCOVERED", "1") != "0"
+DISCOVERY_ENABLED = os.environ.get("DISCOVERY_ENABLED", "1") != "0"
+DISCOVERY_MAX_PER_HOST = int(os.environ.get("DISCOVERY_MAX_PER_HOST", "12"))
+DISCOVERY_TIMEOUT = int(os.environ.get("DISCOVERY_TIMEOUT", "12"))
+DISCOVERY_EVERY = int(os.environ.get("DISCOVERY_EVERY", "300"))
+SEARCH_DISCOVERY_ENABLED = os.environ.get("SEARCH_DISCOVERY_ENABLED", "1") != "0"
+SEARCH_ENGINE = os.environ.get("SEARCH_ENGINE", "both").lower()
+SEARCH_RESULTS_PER_QUERY = int(os.environ.get("SEARCH_RESULTS_PER_QUERY", "6"))
+SEARCH_QUERIES_PER_HOST = int(os.environ.get("SEARCH_QUERIES_PER_HOST", "4"))
+SEARCH_TIMEOUT = int(os.environ.get("SEARCH_TIMEOUT", "12"))
+AUTO_REFRESH_PRICES = os.environ.get("AUTO_REFRESH_PRICES", "1") != "0"
+PRICE_REFRESH_HOURS = float(os.environ.get("PRICE_REFRESH_HOURS", "12"))
 
 HEADERS = {
     "User-Agent": (
@@ -541,65 +555,601 @@ def load_products():
     return products
 
 # ---------------------------------------------------------------------------
-# STATE
+# AUTO-DISCOVERY DES NOUVEAUX PRODUITS
 # ---------------------------------------------------------------------------
 
-def new_entry():
-    return {
-        "status": None,
-        "alerted": False,
-        "weak_hits": 0,
-        "problem_since": 0,
-        "problem_alerted": False,
-        "next_check": 0,
-        "cooldown_until": 0,
-        "last_http_status": None,
-        "errors": 0,
-        "last_price": None,
-    }
+DISCOVERY_KEYWORDS = (
+    "pokemon", "pokémon", "one-piece", "onepiece", "one_piece",
+    "op-", "op17", "op18", "eb-", "eb05", "display", "booster",
+    "etb", "coffret", "bundle", "blister", "pack", "box",
+)
 
-def new_state():
-    return {
-        "products": {},
-        "last_heartbeat": 0,
-        "last_crash_alert": 0,
-        "last_config_alert": 0,
-    }
+# Sorties futures à surveiller explicitement. Cela évite de dépendre uniquement
+# de requêtes génériques lorsque le nom commercial vient juste d'apparaître.
+DISCOVERY_WATCH_TERMS = (
+    "OP-18", "OP18", "The Dominance of God",
+    "EB-05", "Heroines Edition Vol. 2",
+    "30e Anniversaire", "30th Celebration", "30 ans",
+    "Storm Emerald", "Storm Emerald M6",
+)
 
-def load_state():
-    state = new_state()
+
+def _extract_sitemap_urls(base_url: str) -> list[str]:
+    """Trouve les sitemaps déclarés par robots.txt, puis extrait leurs URLs."""
+    host = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
+    robots_url = host.rstrip("/") + "/robots.txt"
+    urls = []
     try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("format inattendu")
-    except FileNotFoundError:
-        return state
-    except Exception as exc:
-        print(f"! état illisible ({exc}); nouveau state.")
-        return state
+        text = fetch(robots_url)
+        for line in text.splitlines():
+            if line.lower().startswith("sitemap:"):
+                u = line.split(":", 1)[1].strip()
+                if u.startswith("http"):
+                    urls.append(u)
+    except Exception:
+        pass
+    if not urls:
+        urls = [host.rstrip("/") + "/sitemap.xml"]
+    return list(dict.fromkeys(urls))[:5]
 
-    for key in ("last_heartbeat", "last_crash_alert", "last_config_alert"):
-        if isinstance(data.get(key), (int, float)):
-            state[key] = data[key]
 
-    if isinstance(data.get("products"), dict):
-        for url, old in data["products"].items():
-            entry = new_entry()
-            if isinstance(old, dict):
-                entry.update({k: old[k] for k in entry if k in old})
-            state["products"][str(url)] = entry
+def _parse_sitemap(xml: str) -> list[str]:
+    # Suffisant pour sitemap.xml et sitemap-index sans dépendance XML externe.
+    return re.findall(r"<loc>\s*(https?://[^<\s]+)\s*</loc>", xml, re.I)
 
-    return state
 
-def save_state(state):
+def _discovery_candidate(url: str) -> bool:
+    low = urllib.parse.unquote(url).lower()
+    return any(k in low for k in DISCOVERY_KEYWORDS)
+
+
+def _product_title(html: str, fallback_url: str) -> str:
+    for pat in (
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',
+        r'<title[^>]*>\s*([^<]+?)\s*</title>',
+        r'"name"\s*:\s*"([^"\\]{3,180})"',
+    ):
+        m = re.search(pat, html, re.I | re.S)
+        if m:
+            title = re.sub(r"\s+", " ", m.group(1)).strip()
+            if title:
+                return title[:180]
+    return urllib.parse.unquote(urlparse(fallback_url).path.rstrip("/").split("/")[-1]).replace("-", " ")[:180]
+
+
+def _load_discovered_urls() -> set[str]:
+    seen = set()
+    if DISCOVERY_FILE.exists():
+        try:
+            for line in DISCOVERY_FILE.read_text(encoding="utf-8").splitlines():
+                if "|" in line and not line.lstrip().startswith("#"):
+                    parts = [x.strip() for x in line.split("|")]
+                    if len(parts) >= 2:
+                        seen.add(parts[1])
+        except OSError:
+            pass
+    return seen
+
+
+
+# ---------------------------------------------------------------------------
+# PRIX DE RÉFÉRENCE : ENSEIGNE UNIQUEMENT
+# ---------------------------------------------------------------------------
+
+def _seller_matches_retailer(seller, retailer: str) -> bool:
+    if not seller:
+        return False
+    low = _norm(seller)
+    wanted = _norm(retailer)
+    aliases = {
+        "fnac": {"fnac", "fnaccom"},
+        "carrefour": {"carrefour", "carrefourfr"},
+        "auchan": {"auchan", "auchanfr"},
+        "cultura": {"cultura", "culturacom"},
+        "kingjouet": {"kingjouet", "kingjouetcom"},
+        "smythstoys": {"smythstoys", "smythstoyscom"},
+        "joueclub": {"joueclub", "joueclubfr"},
+        "lagranderecre": {"lagranderecre", "lagranderecrefr"},
+        "micromania": {"micromania", "micromaniafr"},
+    }
+    return low == wanted or low in aliases.get(wanted, {wanted})
+
+
+def _official_retailer_prices(html: str, retailer: str) -> list[float]:
+    """Retourne uniquement les prix d'offres dont le vendeur est l'enseigne.
+
+    Si une page ne fournit aucun vendeur structuré, on considère son prix comme
+    direct-enseigne (cas fréquent des fiches sans marketplace). Dès qu'une offre
+    structurée comporte un vendeur, seules les offres explicitement attribuées à
+    l'enseigne sont retenues.
+    """
+    prices = []
+    structured_offers = False
+    for data in _ld_nodes(html):
+        for node in _walk(data):
+            if not isinstance(node, dict):
+                continue
+            offers = node.get("offers")
+            if isinstance(offers, dict):
+                offers = [offers]
+            if not isinstance(offers, list):
+                continue
+            for offer in offers:
+                if not isinstance(offer, dict) or offer.get("price") is None:
+                    continue
+                seller = offer.get("seller")
+                seller_name = seller.get("name") if isinstance(seller, dict) else seller if isinstance(seller, str) else None
+                if seller_name:
+                    structured_offers = True
+                    if _seller_matches_retailer(seller_name, retailer):
+                        value = parse_price(offer.get("price"))
+                        if value is not None and value > 0:
+                            prices.append(value)
+                else:
+                    value = parse_price(offer.get("price"))
+                    if value is not None and value > 0:
+                        prices.append(value)
+    if prices:
+        return prices
+    if structured_offers:
+        # La page expose des vendeurs mais aucun n'est l'enseigne : marketplace
+        # uniquement, donc surtout ne pas utiliser son prix comme référence.
+        return []
+    fallback = extract_price(html)
+    return [fallback] if fallback is not None and fallback > 0 else []
+
+
+def _reference_price_from_retailer(html: str, retailer: str):
+    prices = _official_retailer_prices(html, retailer)
+    if not prices:
+        return None
+    # S'il y a plusieurs offres directes de l'enseigne, le prix le plus bas est
+    # le seuil réellement affiché par cette enseigne, sans prendre un vendeur tiers.
+    return min(prices)
+
+
+
+
+def _extract_gtin_candidates(html: str) -> list[str]:
+    """Extrait des EAN/GTIN-13 visibles dans les données structurées de la fiche."""
+    vals = []
+    patterns = [
+        r'"(?:gtin13|gtin|ean)"\s*:\s*"?(\d{13})',
+        r'\b(\d{13})\b',
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, html, re.I):
+            v = m.group(1)
+            if v not in vals:
+                vals.append(v)
+            if len(vals) >= 5:
+                return vals
+    return vals
+
+def _candidate_product_queries(name: str, html: str) -> list[str]:
+    """Construit des recherches assez strictes pour retrouver le même produit."""
+    qs = []
+    for ean in _extract_gtin_candidates(html):
+        qs.append(ean)
+    title = _product_title(html, "")
+    if title:
+        # Nettoyage des mentions de boutique pour ne pas biaiser la recherche.
+        clean = re.sub(r"^(?:[^|]+\s-\s)+", "", title).strip()
+        qs.append('"' + clean[:120] + '"')
+    if name:
+        clean_name = re.sub(r"^[^|]+\s-\s", "", name).strip()
+        if clean_name:
+            qs.append('"' + clean_name[:120] + '"')
+    return list(dict.fromkeys(qs))
+
+def _find_official_price_for_product(name: str, source_url: str, source_html: str):
+    """Cherche le prix enseigne officiel du même produit dans les grandes enseignes."""
+    prices = []
+    seen_urls = set()
+    queries = _candidate_product_queries(name, source_html)
+    for domain, (retailer, _families) in DISCOVERY_RETAILERS.items():
+        for base_query in queries[:3]:
+            query = f'site:{domain} {base_query}'
+            for url in _search_engine_urls(query)[:SEARCH_RESULTS_PER_QUERY]:
+                parsed = urlparse(url)
+                if parsed.netloc.lower().split(":")[0].lstrip("www.") != domain:
+                    continue
+                clean = url.rstrip("/")
+                if clean in seen_urls or any(x in parsed.path.lower() for x in ("/search", "/recherche", "/account", "/login", "/panier", "/cart")):
+                    continue
+                seen_urls.add(clean)
+                try:
+                    html = _fetch_once(url)
+                except Exception:
+                    continue
+                title = _product_title(html, url).lower()
+                # Une correspondance EAN est idéale. À défaut, exige plusieurs
+                # éléments du nom pour éviter de confondre deux coffrets proches.
+                src_title = _product_title(source_html, source_url).lower()
+                tokens = [t for t in re.findall(r"[a-z0-9éèêàùûôîïç]+", src_title) if len(t) >= 4]
+                overlap = sum(1 for t in set(tokens) if t in title)
+                ean_match = bool(set(_extract_gtin_candidates(source_html)) & set(_extract_gtin_candidates(html)))
+                if not ean_match and overlap < 3:
+                    continue
+                price = _reference_price_from_retailer(html, retailer)
+                if price is not None:
+                    prices.append((price, retailer, clean))
+    if not prices:
+        return None
+    return min(prices, key=lambda x: x[0])
+
+def refresh_existing_reference_prices(products: list[dict]) -> int:
+    """Recalcule les prix de référence à partir des grandes enseignes uniquement."""
+    if not AUTO_REFRESH_PRICES:
+        return 0
+    changed = 0
+    rows = []
     try:
-        payload = json.dumps(
-            state, indent=2, ensure_ascii=False, sort_keys=True
-        ) + "\n"
-        tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
-        tmp.write_text(payload, encoding="utf-8")
-        os.replace(tmp, STATE_FILE)
-    except Exception as exc:
-        print(f"! écriture state impossible: {exc}")
+        text = PRODUCTS_FILE.read_text(encoding="utf-8-sig")
+    except OSError:
+        return 0
+    product_by_url = {p["url"].rstrip("/"): p for p in products}
+    for raw in text.splitlines():
+        line = raw.strip()
+        m = LINE_RE.match(line) if line and not line.startswith("#") else None
+        if not m:
+            rows.append(raw)
+            continue
+        name, url, old_price = m.group(1).strip(), m.group(2).strip(), parse_price(m.group(3))
+        if old_price is None:
+            rows.append(raw); continue
+        # Ne cherche le prix de référence que pour Pokémon / One Piece.
+        if not re.search(r"pokemon|pokémon|one[ -]?piece|op-\d+|eb-\d+", name + " " + url, re.I):
+            rows.append(raw); continue
+        try:
+            source_html = _fetch_once(url)
+            found = _find_official_price_for_product(name, url, source_html)
+        except Exception:
+            found = None
+        if found is None:
+            rows.append(raw)
+            continue
+        new_price, retailer, matched_url = found
+        if abs(new_price - old_price) >= 0.01:
+            rows.append(f"{name} | {url} | {new_price:.2f}")
+            changed += 1
+            print(f"~ prix référence mis à jour: {name} : {old_price:.2f} -> {new_price:.2f} ({retailer})")
+        else:
+            rows.append(raw)
+    if changed:
+        try:
+            PRODUCTS_FILE.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(f"! impossible d'écrire les nouveaux prix: {exc}")
+            return 0
+    return changed
 
-# -----------------------------
+def _append_products_txt(items: list[dict]) -> int:
+    """Ajoute les nouvelles fiches validées directement dans products.txt."""
+    if not items:
+        return 0
+    try:
+        current = PRODUCTS_FILE.read_text(encoding="utf-8-sig")
+    except OSError:
+        current = ""
+    existing_urls = set()
+    for line in current.splitlines():
+        m = LINE_RE.match(line.strip())
+        if m:
+            existing_urls.add(m.group(2).rstrip("/"))
+    additions = []
+    for item in items:
+        url = item["url"].rstrip("/")
+        price = item.get("reference_price")
+        if not url or price is None or url in existing_urls:
+            continue
+        additions.append(f'{item["name"]} | {url} | {price:.2f}')
+        existing_urls.add(url)
+    if not additions:
+        return 0
+    sep = "\n" if current and not current.endswith("\n") else ""
+    try:
+        PRODUCTS_FILE.write_text(current + sep + "\n# Produits découverts automatiquement — prix enseigne\n" + "\n".join(additions) + "\n", encoding="utf-8")
+        return len(additions)
+    except OSError as exc:
+        print(f"! impossible d'ajouter automatiquement à products.txt: {exc}")
+        return 0
+
+# ---------------------------------------------------------------------------
+# RECHERCHE GOOGLE / BING + GRANDES ENSEIGNES
+# ---------------------------------------------------------------------------
+
+DISCOVERY_RETAILERS = {
+    "fnac.com": ("Fnac", ("Pokémon", "One Piece")),
+    "carrefour.fr": ("Carrefour", ("Pokémon", "One Piece")),
+    "auchan.fr": ("Auchan", ("Pokémon", "One Piece")),
+    "cultura.com": ("Cultura", ("Pokémon", "One Piece")),
+    "king-jouet.com": ("King Jouet", ("Pokémon", "One Piece")),
+    "smythstoys.com": ("Smyths Toys", ("Pokémon", "One Piece")),
+    "joueclub.fr": ("JouéClub", ("Pokémon", "One Piece")),
+    "lagranderecre.fr": ("La Grande Récré", ("Pokémon", "One Piece")),
+    "micromania.fr": ("Micromania", ("Pokémon", "One Piece")),
+}
+
+
+def _search_result_urls_google(query: str) -> list[str]:
+    url = "https://www.google.com/search?" + urllib.parse.urlencode({
+        "q": query, "num": SEARCH_RESULTS_PER_QUERY, "hl": "fr", "gl": "fr",
+    })
+    try:
+        text = _fetch_once(url)
+    except Exception:
+        return []
+    found = []
+    # Google utilise plusieurs variantes de liens selon la page retournée.
+    for m in re.finditer(r'href=["\'](/url\?q=|)(https?://[^"\'&<>]+)', text, re.I):
+        u = html_lib.unescape(m.group(2))
+        if u not in found:
+            found.append(u)
+    # Variante /url?q=...&sa=...
+    for m in re.finditer(r'href=["\']/url\?q=([^&"\']+)', text, re.I):
+        u = urllib.parse.unquote(html_lib.unescape(m.group(1)))
+        if u.startswith("http") and u not in found:
+            found.append(u)
+    return found[:SEARCH_RESULTS_PER_QUERY * 2]
+
+
+def _search_result_urls_bing(query: str) -> list[str]:
+    url = "https://www.bing.com/search?" + urllib.parse.urlencode({
+        "q": query, "count": SEARCH_RESULTS_PER_QUERY, "setlang": "fr-FR",
+    })
+    try:
+        text = _fetch_once(url)
+    except Exception:
+        return []
+    found = []
+    for m in re.finditer(r'<li[^>]*class=["\'][^"\']*b_algo[^"\']*["\'][\s\S]*?<h2[^>]*>\s*<a[^>]+href=["\']([^"\']+)', text, re.I):
+        u = html_lib.unescape(m.group(1))
+        if u.startswith("http") and u not in found:
+            found.append(u)
+    return found[:SEARCH_RESULTS_PER_QUERY * 2]
+
+
+def _search_engine_urls(query: str) -> list[str]:
+    urls = []
+    engines = []
+    if SEARCH_ENGINE in ("google", "both"):
+        engines.append(_search_result_urls_google)
+    if SEARCH_ENGINE in ("bing", "both"):
+        engines.append(_search_result_urls_bing)
+    for engine in engines:
+        urls.extend(engine(query))
+    return list(dict.fromkeys(urls))
+
+
+def discover_via_search_engines(products: list[dict]) -> list[dict]:
+    """Découvre et active automatiquement les nouveautés chez les grandes enseignes.
+
+    Aucune notification de découverte n'est envoyée. Une fiche n'est ajoutée à
+    products.txt que si son prix peut être rattaché à l'enseigne elle-même, et non
+    à un vendeur marketplace. Le prix ainsi obtenu devient la référence du produit;
+    le filtre habituel +10 % décide ensuite si une alerte de disponibilité part.
+    """
+    if not SEARCH_DISCOVERY_ENABLED or not AUTO_ADD_DISCOVERED:
+        return []
+
+    known = {p["url"].rstrip("/") for p in products}
+    discovered = []
+
+    for domain, (retailer, families) in DISCOVERY_RETAILERS.items():
+        queries = [
+            f'site:{domain} (pokemon OR pokémon) ("30e Anniversaire" OR "30th Celebration" OR "30 ans" OR "Storm Emerald" OR "Storm Emerald M6")',
+            f'site:{domain} ("One Piece" OR OP-18 OR OP18 OR EB-05 OR EB05 OR "Heroines Edition") (précommande OR acheter OR stock OR display OR booster)',
+            f'site:{domain} "{families[0]}" (booster OR display OR coffret OR ETB OR pack OR box)',
+            f'site:{domain} "{families[1]}" (booster OR display OR coffret OR ETB OR pack OR box)',
+        ]
+
+        for query in queries[:max(SEARCH_QUERIES_PER_HOST + 1, 6)]:
+            for url in _search_engine_urls(query):
+                parsed = urlparse(url)
+                if parsed.netloc.lower().split(":")[0].lstrip("www.") != domain:
+                    continue
+                clean = url.rstrip("/")
+                if clean in known:
+                    continue
+                path = parsed.path.lower()
+                if any(x in path for x in ("/search", "/recherche", "/account", "/login", "/panier", "/cart")):
+                    continue
+                try:
+                    html = _fetch_once(url)
+                except Exception:
+                    continue
+                title = _product_title(html, url)
+                low = (title + " " + url).lower()
+                if not ("pokemon" in low or "pokémon" in low or "one piece" in low or "one-piece" in low):
+                    continue
+                if not any(x in low for x in ("booster", "display", "coffret", "etb", "pack", "box", "deck")):
+                    continue
+
+                reference_price = _reference_price_from_retailer(html, retailer)
+                if reference_price is None:
+                    # Pas de prix fiable vendu par l'enseigne elle-même : on ignore
+                    # la fiche pour éviter d'apprendre un prix marketplace/spéculatif.
+                    continue
+                status, source = classify(html)
+                item = {
+                    "name": f"{retailer} - {title}",
+                    "url": clean,
+                    "reference_price": reference_price,
+                    "price": reference_price,
+                    "status": status,
+                    "source": source,
+                }
+                discovered.append(item)
+                known.add(clean)
+
+    if not discovered:
+        return []
+
+    added = _append_products_txt(discovered)
+    if added:
+        # Les produits seront repris dans la liste active au tour suivant.
+        print(f"+ {added} nouveau(x) produit(s) ajouté(s) automatiquement à products.txt")
+    return discovered
+
+def discover_new_products(products: list[dict]) -> list[dict]:
+    """Compatibilité historique : la découverte active passe par Google/Bing.
+
+    Les sitemaps de boutiques spécialisées ne servent plus à définir un prix de
+    référence. Cela évite qu'un prix élevé d'un revendeur soit appris comme prix
+    normal. Les grandes enseignes sont traitées par discover_via_search_engines().
+    """
+    return []
+
+def safe_cycle(state, products):
+    try:
+        started = time.monotonic()
+        checked, available, errors = run_due(
+            state, products, started + RUN_DEADLINE
+        )
+        save_state(state)
+        if checked:
+            print(
+                f"[{datetime.now():%H:%M:%S}] "
+                f"{checked} vérif(s), {available} dispo(s), "
+                f"{errors} erreur(s), {time.monotonic()-started:.1f}s"
+            )
+    except Exception:
+        trace = traceback.format_exc()
+        print(trace)
+        if time.time() - state.get("last_crash_alert", 0) >= ALERT_COOLDOWN_HOURS * 3600:
+            notify(
+                "Bot Pokémon : erreur interne",
+                trace[-1200:],
+                priority="4",
+                tags="warning",
+            )
+            state["last_crash_alert"] = time.time()
+        save_state(state)
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    parser = argparse.ArgumentParser(
+        description="Surveillance de stock Pokémon / One Piece avec filtre prix."
+    )
+    parser.add_argument("--once", action="store_true",
+                        help="vérifie uniquement les produits arrivés à échéance")
+    parser.add_argument("--fast", action="store_true",
+                        help="surveillance rapide pendant quelques minutes")
+    parser.add_argument("--duration", type=int, default=300,
+                        help="durée de --fast en secondes")
+    parser.add_argument("--interval", type=int, default=20,
+                        help="intervalle de base du mode --fast")
+    parser.add_argument("--test", action="store_true",
+                        help="teste ntfy")
+    args = parser.parse_args()
+
+    if args.test:
+        sys.exit(0 if notify(
+            "Test bot Pokémon",
+            "Les notifications ntfy fonctionnent.",
+            priority="3",
+            tags="white_check_mark",
+        ) else 1)
+
+    try:
+        products = load_products()
+    except RuntimeError as exc:
+        print(f"! {exc}")
+        sys.exit(2)
+
+    state = load_state()
+
+    # Recalcule périodiquement les prix de référence à partir des grandes
+    # enseignes uniquement. Aucun prix Marketplace/spécialiste n'est utilisé.
+    last_price_refresh = state.get("last_price_refresh", 0)
+    if AUTO_REFRESH_PRICES and (time.time() - last_price_refresh >= PRICE_REFRESH_HOURS * 3600 or args.once):
+        try:
+            refresh_existing_reference_prices(products)
+            products[:] = load_products()
+            state["last_price_refresh"] = time.time()
+            save_state(state)
+        except Exception as exc:
+            print(f"! recalcul des prix de référence en erreur: {exc}")
+
+    # Découverte automatique au démarrage. Les nouvelles fiches validées par une
+    # grande enseigne sont ajoutées directement à products.txt, sans notification
+    # de découverte. Les notifications restent réservées aux disponibilités au
+    # prix de référence autorisé.
+    if DISCOVERY_ENABLED:
+        try:
+            discover_new_products(products)
+            if SEARCH_DISCOVERY_ENABLED:
+                discover_via_search_engines(products)
+                products[:] = load_products()
+            # Les fiches découvertes avec précommande/stock sont immédiatement
+            # reprises par le scheduler au tour suivant, sans notification de
+            # "découverte" : seule la notification de disponibilité est envoyée.
+            state["last_discovery"] = time.time()
+            save_state(state)
+        except Exception as exc:
+            print(f"! découverte automatique en erreur: {exc}")
+
+    if args.once:
+        # --once ignore le scheduler pour vérifier tout le fichier.
+        for product in products:
+            state["products"].setdefault(product["url"], new_entry())["next_check"] = 0
+        safe_cycle(state, products)
+        return
+
+    if args.fast:
+        end = time.monotonic() + max(30, args.duration)
+        while time.monotonic() < end:
+            # En mode rapide, on force les produits à être dus à chaque tour.
+            for product in products:
+                entry = state["products"].setdefault(product["url"], new_entry())
+                entry["next_check"] = 0
+            safe_cycle(state, products)
+            if DISCOVERY_ENABLED and time.time() - state.get("last_discovery", 0) >= min(DISCOVERY_EVERY, 300):
+                try:
+                    discover_new_products(products)
+                    if SEARCH_DISCOVERY_ENABLED:
+                        discover_via_search_engines(products)
+                        products[:] = load_products()
+                    state["last_discovery"] = time.time()
+                    save_state(state)
+                except Exception as exc:
+                    print(f"! découverte automatique en erreur: {exc}")
+            time.sleep(max(MIN_INTERVAL, args.interval) + random.uniform(0, 3))
+        print("Mode rapide terminé.")
+        return
+
+    print(
+        "Bot lancé — prix de référence + "
+        f"{PRICE_TOLERANCE_PCT:g}% | {len(products)} produits."
+    )
+    print("Ctrl+C pour arrêter.")
+
+    try:
+        while True:
+            safe_cycle(state, products)
+            if DISCOVERY_ENABLED and time.time() - state.get("last_discovery", 0) >= DISCOVERY_EVERY:
+                try:
+                    discover_new_products(products)
+                    if SEARCH_DISCOVERY_ENABLED:
+                        discover_via_search_engines(products)
+                        products[:] = load_products()
+                    state["last_discovery"] = time.time()
+                    save_state(state)
+                except Exception as exc:
+                    print(f"! découverte automatique en erreur: {exc}")
+            time.sleep(3)
+    except KeyboardInterrupt:
+        print("\nArrêt.")
+
+if __name__ == "__main__":
+    main()
