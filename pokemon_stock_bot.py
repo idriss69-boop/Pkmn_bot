@@ -525,6 +525,8 @@ def load_products():
             continue
 
         match = LINE_RE.match(line)
+        if line.lower().replace(" ", "") in {"nom|url|prix_normal", "nom|url|prixnormal"}:
+            continue
         if not match or "..." in match.group(2):
             print(
                 f"! ligne {line_no} ignorée: format attendu "
@@ -553,6 +555,323 @@ def load_products():
     if not products:
         raise RuntimeError("products.txt ne contient aucun produit valide.")
     return products
+
+# ---------------------------------------------------------------------------
+# STATE
+# ---------------------------------------------------------------------------
+
+def new_entry():
+    return {
+        "status": None,
+        "alerted": False,
+        "weak_hits": 0,
+        "problem_since": 0,
+        "problem_alerted": False,
+        "next_check": 0,
+        "cooldown_until": 0,
+        "last_http_status": None,
+        "errors": 0,
+        "last_price": None,
+    }
+
+def new_state():
+    return {
+        "products": {},
+        "last_heartbeat": 0,
+        "last_crash_alert": 0,
+        "last_config_alert": 0,
+    }
+
+def load_state():
+    state = new_state()
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("format inattendu")
+    except FileNotFoundError:
+        return state
+    except Exception as exc:
+        print(f"! état illisible ({exc}); nouveau state.")
+        return state
+
+    for key in ("last_heartbeat", "last_crash_alert", "last_config_alert"):
+        if isinstance(data.get(key), (int, float)):
+            state[key] = data[key]
+
+    if isinstance(data.get("products"), dict):
+        for url, old in data["products"].items():
+            entry = new_entry()
+            if isinstance(old, dict):
+                entry.update({k: old[k] for k in entry if k in old})
+            state["products"][str(url)] = entry
+
+    return state
+
+def save_state(state):
+    try:
+        payload = json.dumps(
+            state, indent=2, ensure_ascii=False, sort_keys=True
+        ) + "\n"
+        tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, STATE_FILE)
+    except Exception as exc:
+        print(f"! écriture state impossible: {exc}")
+
+# ---------------------------------------------------------------------------
+# CHECK / PRICE POLICY
+# ---------------------------------------------------------------------------
+
+def accepted_price(reference_price: float) -> float:
+    return round(reference_price * (1 + PRICE_TOLERANCE_PCT / 100.0), 2)
+
+def check_one(product: dict) -> dict:
+    result = {
+        **product,
+        "status": None,
+        "source": None,
+        "price": None,
+        "error": None,
+        "http_status": None,
+    }
+
+    try:
+        html = fetch(product["url"])
+        result["status"], result["source"] = classify(html)
+
+        if PRICE_FILTER_ENABLED:
+            result["price"] = extract_price(html)
+    except FetchError as exc:
+        result["error"] = str(exc)
+        result["http_status"] = exc.status_code
+    except Exception as exc:
+        result["error"] = (
+            f"erreur inattendue ({exc.__class__.__name__}: {str(exc)[:80]})"
+        )
+    return result
+
+def due(product, entry, now):
+    # Premier passage immédiat.
+    if not entry.get("next_check"):
+        return True
+    return now >= float(entry.get("next_check", 0))
+
+def schedule_next(entry, result, now):
+    status = result.get("status")
+    http_status = result.get("http_status")
+    errors = int(entry.get("errors", 0))
+
+    if http_status == 429:
+        entry["cooldown_until"] = now + COOLDOWN_429
+        entry["next_check"] = now + COOLDOWN_429
+        return
+
+    if http_status == 403:
+        entry["cooldown_until"] = now + COOLDOWN_403
+        entry["next_check"] = now + COOLDOWN_403
+        return
+
+    if result.get("error"):
+        errors += 1
+        entry["errors"] = min(errors, 8)
+        interval = min(MAX_INTERVAL, DEFAULT_INTERVAL * (2 ** min(errors, 4)))
+    else:
+        entry["errors"] = 0
+        entry["cooldown_until"] = 0
+
+        # Produit dispo ou récemment disponible = surveillance renforcée.
+        if status in ("in", "preorder"):
+            interval = PRIORITY_INTERVAL
+        elif entry.get("alerted"):
+            interval = PRIORITY_INTERVAL
+        else:
+            interval = DEFAULT_INTERVAL
+
+    jitter = random.uniform(-0.10, 0.10) * interval
+    interval = max(MIN_INTERVAL, int(interval + jitter))
+    entry["next_check"] = now + interval
+
+def process_result(state, result):
+    url = result["url"]
+    entry = state["products"].setdefault(url, new_entry())
+    now = time.time()
+
+    if result["error"]:
+        if not entry["problem_since"]:
+            entry["problem_since"] = now
+        minutes = (now - entry["problem_since"]) / 60
+        print(f"- {result['name']}: ERREUR {result['error']} [{minutes:.0f} min]")
+        schedule_next(entry, result, now)
+        return
+
+    if entry["problem_alerted"]:
+        notify(
+            "Bot Pokémon : site de nouveau lisible",
+            result["name"],
+            result["url"],
+            priority="2",
+            tags="white_check_mark",
+        )
+
+    entry["problem_since"] = 0
+    entry["problem_alerted"] = False
+    entry["last_http_status"] = 200
+    entry["status"] = result["status"]
+    entry["last_price"] = result["price"]
+
+    labels = {
+        "in": "EN STOCK",
+        "preorder": "PRÉCOMMANDE",
+        "out": "épuisé",
+        "blocked": "BLOQUÉ",
+        "unknown": "INCONNU",
+    }
+    label = labels.get(result["status"], result["status"])
+    price_txt = (
+        f" | prix {result['price']:.2f} €"
+        if result["price"] is not None else ""
+    )
+    print(f"- {result['name']}: {label} [{result['source']}]{price_txt}")
+
+    # Prix: aucune alerte si le prix est inconnu ou trop élevé.
+    price_ok = True
+    if PRICE_FILTER_ENABLED:
+        if result["price"] is None:
+            price_ok = not PRICE_REQUIRED
+        else:
+            ceiling = accepted_price(result["reference_price"])
+            price_ok = result["price"] <= ceiling
+
+            if not price_ok:
+                entry["alerted"] = False
+                entry["weak_hits"] = 0
+                print(
+                    f"  -> prix refusé: {result['price']:.2f} € > "
+                    f"plafond {ceiling:.2f} €"
+                )
+                schedule_next(entry, result, now)
+                return
+
+    available = (
+        result["status"] == "in" or
+        (result["status"] == "preorder" and ALERT_ON_PREORDER)
+    )
+
+    if not available or not price_ok:
+        entry["alerted"] = False
+        entry["weak_hits"] = 0
+        schedule_next(entry, result, now)
+        return
+
+    # Détection faible: confirmation sur deux lectures.
+    if result["source"] == "keywords":
+        entry["weak_hits"] = int(entry.get("weak_hits", 0)) + 1
+        if entry["weak_hits"] < WEAK_CONFIRMATIONS:
+            print("  ... détection faible, confirmation au prochain passage")
+            schedule_next(entry, result, now)
+            return
+
+    if not entry["alerted"]:
+        ceiling = accepted_price(result["reference_price"])
+        price_text = (
+            f"Prix détecté : {result['price']:.2f} €\n"
+            f"Prix normal : {result['reference_price']:.2f} €\n"
+            f"Plafond +{PRICE_TOLERANCE_PCT:g}% : {ceiling:.2f} €"
+            if PRICE_FILTER_ENABLED else
+            "Filtre prix désactivé."
+        )
+        title = (
+            f"Stock dispo : {result['name']}"
+            if result["status"] == "in"
+            else f"Précommande : {result['name']}"
+        )
+        message = (
+            f"{result['name']}\n\n"
+            f"{price_text}\n\n"
+            f"{result['url']}\n\n"
+            f"Source stock : {result['source']}"
+        )
+        if notify(title, message, result["url"], priority="5",
+                  tags="rotating_light"):
+            entry["alerted"] = True
+
+    schedule_next(entry, result, now)
+
+def run_due(state, products, deadline):
+    now = time.time()
+    due_products = [
+        p for p in products
+        if due(p, state["products"].setdefault(p["url"], new_entry()), now)
+    ]
+
+    if not due_products:
+        return 0, 0, 0
+
+    # Regroupement par domaine: parallélisme entre magasins,
+    # délai conservateur à l'intérieur d'un même domaine.
+    groups = {}
+    for product in due_products:
+        host = urlparse(product["url"]).netloc.lower()
+        groups.setdefault(host, []).append(product)
+
+    results = []
+    def worker(group):
+        local = []
+        for i, product in enumerate(group):
+            if time.monotonic() > deadline:
+                break
+            if i:
+                time.sleep(random.uniform(HOST_DELAY_MIN, HOST_DELAY_MAX))
+            local.append(check_one(product))
+        return local
+
+    workers = max(1, min(MAX_WORKERS, len(groups)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(worker, group) for group in groups.values()]
+        for future in as_completed(futures):
+            try:
+                results.extend(future.result())
+            except Exception as exc:
+                print(f"! groupe de vérification en erreur: {exc}")
+
+    checked = 0
+    available = 0
+    errors = 0
+    for result in results:
+        checked += 1
+        if result.get("error"):
+            errors += 1
+        elif result.get("status") in ("in", "preorder"):
+            available += 1
+        process_result(state, result)
+
+    return checked, available, errors
+
+def safe_cycle(state, products):
+    try:
+        started = time.monotonic()
+        checked, available, errors = run_due(
+            state, products, started + RUN_DEADLINE
+        )
+        save_state(state)
+        if checked:
+            print(
+                f"[{datetime.now():%H:%M:%S}] "
+                f"{checked} vérif(s), {available} dispo(s), "
+                f"{errors} erreur(s), {time.monotonic()-started:.1f}s"
+            )
+    except Exception:
+        trace = traceback.format_exc()
+        print(trace)
+        if time.time() - state.get("last_crash_alert", 0) >= ALERT_COOLDOWN_HOURS * 3600:
+            notify(
+                "Bot Pokémon : erreur interne",
+                trace[-1200:],
+                priority="4",
+                tags="warning",
+            )
+            state["last_crash_alert"] = time.time()
+        save_state(state)
 
 # ---------------------------------------------------------------------------
 # AUTO-DISCOVERY DES NOUVEAUX PRODUITS
@@ -1001,35 +1320,8 @@ def discover_new_products(products: list[dict]) -> list[dict]:
     """
     return []
 
-def safe_cycle(state, products):
-    try:
-        started = time.monotonic()
-        checked, available, errors = run_due(
-            state, products, started + RUN_DEADLINE
-        )
-        save_state(state)
-        if checked:
-            print(
-                f"[{datetime.now():%H:%M:%S}] "
-                f"{checked} vérif(s), {available} dispo(s), "
-                f"{errors} erreur(s), {time.monotonic()-started:.1f}s"
-            )
-    except Exception:
-        trace = traceback.format_exc()
-        print(trace)
-        if time.time() - state.get("last_crash_alert", 0) >= ALERT_COOLDOWN_HOURS * 3600:
-            notify(
-                "Bot Pokémon : erreur interne",
-                trace[-1200:],
-                priority="4",
-                tags="warning",
-            )
-            state["last_crash_alert"] = time.time()
-        save_state(state)
-
 # ---------------------------------------------------------------------------
 # CLI
-# ---------------------------------------------------------------------------
 
 def main():
     for stream in (sys.stdout, sys.stderr):
