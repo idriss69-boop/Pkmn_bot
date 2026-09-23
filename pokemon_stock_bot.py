@@ -21,6 +21,7 @@ import re
 import sys
 import time
 import traceback
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -58,11 +59,11 @@ PHYSICAL_STORE_RADIUS_LABEL = os.environ.get("PHYSICAL_STORE_RADIUS_LABEL", "Lyo
 LYON_STORE_NAMES = tuple(x.strip() for x in os.environ.get(
     "LYON_STORE_NAMES",
     "Fnac Lyon Bellecour|Fnac Lyon Part-Dieu|Fnac Lyon - Gare Part-Dieu|"
-    "Carrefour Lyon Part Dieu|Carrefour Lyon Confluence|Carrefour Vénissieux|"
-    "Auchan Supermarché Lyon Gerland|Auchan Supermarché Lyon Félix Faure|Auchan Supermarché Garibaldi - Lyon|"
-    "Cultura Champagne-au-Mont-d'Or|Cultura Saint-Priest|"
-    "King Jouet Lyon Grolée|King Jouet Boutique Lyon 4ème|King Jouet Orchestra Lyon|"
-    "Smyths Toys Bron|JouéClub Lyon Confluence|La Grande Récré LYON|"
+    "Carrefour Lyon Part Dieu|Carrefour Lyon Confluence|Carrefour Market Lyon Frères Lumière|Carrefour Vénissieux|"
+    "Auchan Supermarché Lyon Gerland|Auchan Supermarché Lyon Félix Faure|Auchan Supermarché Garibaldi - Lyon|Auchan Supermarché City Lyon Université|"
+    ""
+    "King Jouet Lyon Grolée|King Dultes Lyon Part-Dieu|King Jouet Boutique Lyon 4ème|King Jouet Orchestra Lyon/Carré de Soie|King Jouet Caluire|King Jouet Givors|"
+    "Smyths Toys Bron|JouéClub Lyon Confluence|La Grande Récré LYON La Part Dieu|"
     "Micromania - Zing LYON CENTRE VILLE|Micromania - Zing LYON PART DIEU|Micromania - Zing LYON GRENETTE"
 ).split("|" ) if x.strip())
 
@@ -647,73 +648,189 @@ def accepted_price(reference_price: float) -> float:
     return round(reference_price * (1 + PRICE_TOLERANCE_PCT / 100.0), 2)
 
 def _physical_status_from_html(html: str, retailer: str = "") -> tuple[str | None, list[str]]:
-    """Détecte ce que la fiche officielle expose sur le stock magasin.
+    """Détecte le stock physique Lyon avec plusieurs signaux.
 
-    On exige que le marqueur de disponibilité soit proche du nom du magasin
-    lorsqu'un magasin Lyon précis est annoncé, afin d'éviter les faux positifs
-    dus à un simple pied de page ou à un annuaire de magasins.
+    Priorité aux informations magasin réellement exposées par l'enseigne :
+    - nom du magasin + marqueur de disponibilité proche dans le HTML ;
+    - données JSON/Next.js contenant un magasin et un booléen de disponibilité ;
+    - sinon, un simple indicateur générique de retrait/stock magasin donne
+      seulement ``possible`` et ne déclenche PAS d'alerte locale.
     """
     if not html:
         return None, []
-    low = html_lib.unescape(html).lower()
+
+    def norm_text(value: str) -> str:
+        value = html_lib.unescape(str(value)).lower()
+        value = unicodedata.normalize("NFKD", value)
+        value = "".join(c for c in value if not unicodedata.combining(c))
+        return re.sub(r"\s+", " ", value).strip()
+
+    low = norm_text(html)
+
     explicit_in = (
         "en stock en magasin", "stock en magasin", "disponible en magasin",
-        "disponible dans votre magasin", "retrait 1h en magasin",
-        "retrait magasin", "réservation magasin", "reservation magasin",
-        "click & collect", "click and collect", "e-réservation", "e-reservation",
+        "disponible dans votre magasin", "disponible dans ce magasin",
+        "disponible dans le magasin", "en rayon", "retrait 1h en magasin",
+        "retrait 1h gratuit", "retrait sous 2h", "retrait en 2h",
+        "disponible pour retrait", "disponible au retrait",
+        "disponible a la collecte", "available to collect",
     )
     explicit_out = (
         "indisponible en magasin", "non disponible en magasin",
         "aucun magasin disponible", "pas disponible en magasin",
+        "indisponible dans ce magasin", "indisponible dans votre magasin",
     )
-    has_in = any(x in low for x in explicit_in)
     has_out = any(x in low for x in explicit_out)
+    positive_phrases = tuple(x for x in explicit_in if x not in (
+        "disponible en magasin", "disponible dans votre magasin",
+        "disponible dans ce magasin", "disponible dans le magasin",
+    ))
+    has_in = any(x in low for x in positive_phrases)
+    # Ces phrases positives sont des sous-chaînes de variantes négatives ;
+    # on ne les considère positives que si elles ne sont pas dans un contexte
+    # "indisponible/non disponible".
+    if re.search(r"(?<!in)disponible en magasin", low):
+        has_in = True
+    if re.search(r"(?<!in)disponible (?:dans votre|dans ce|dans le) magasin", low):
+        has_in = True
+    if has_out and not any(x in low for x in positive_phrases):
+        has_in = False
 
     aliases = {
-        "Fnac Lyon Bellecour": ("fnac lyon bellecour", "fnac bellecour"),
-        "Fnac Lyon Part-Dieu": ("fnac lyon part-dieu", "fnac part-dieu"),
-        "Fnac Lyon - Gare Part-Dieu": ("fnac lyon - gare part-dieu", "fnac gare part-dieu"),
+        "Fnac Lyon Bellecour": (
+            "fnac lyon bellecour", "fnac bellecour",
+            "fnac lyon 2", "fnac 85 rue de la republique",
+        ),
+        "Fnac Lyon Part-Dieu": (
+            "fnac lyon part-dieu", "fnac part-dieu", "fnac lyon part dieu",
+            "fnac 17 rue dr bouchut",
+        ),
+        "Fnac Lyon - Gare Part-Dieu": (
+            "fnac lyon - gare part-dieu", "fnac gare part-dieu",
+        ),
         "Carrefour Lyon Part Dieu": ("carrefour lyon part dieu", "carrefour part dieu"),
         "Carrefour Lyon Confluence": ("carrefour lyon confluence", "carrefour confluence"),
-        "Carrefour Vénissieux": ("carrefour vénissieux", "carrefour venissieux"),
-        "Auchan Supermarché Lyon Gerland": ("auchan supermarché lyon gerland", "auchan lyon gerland"),
-        "Auchan Supermarché Lyon Félix Faure": ("auchan supermarché lyon félix faure", "auchan lyon félix faure"),
-        "Auchan Supermarché Garibaldi - Lyon": ("auchan supermarché garibaldi - lyon", "auchan garibaldi"),
-        "Cultura Champagne-au-Mont-d'Or": ("cultura champagne-au-mont-d'or", "cultura champagne au mont d'or"),
-        "Cultura Saint-Priest": ("cultura saint-priest", "cultura saint priest"),
-        "King Jouet Lyon Grolée": ("king jouet lyon grolée", "king jouet lyon grolee"),
-        "King Jouet Boutique Lyon 4ème": ("king jouet boutique lyon 4ème", "king jouet boutique lyon 4eme"),
-        "King Jouet Orchestra Lyon": ("king jouet orchestra lyon", "king jouet carré de soie", "king jouet carre de soie"),
+        "Carrefour Market Lyon Frères Lumière": ("carrefour market lyon freres lumiere", "carrefour freres lumiere"),
+        "Carrefour Vénissieux": ("carrefour venissieux",),
+        "Auchan Supermarché Lyon Gerland": ("auchan supermarche lyon gerland", "auchan lyon gerland"),
+        "Auchan Supermarché Lyon Félix Faure": ("auchan supermarche lyon felix faure", "auchan lyon felix faure"),
+        "Auchan Supermarché Garibaldi - Lyon": ("auchan supermarche garibaldi - lyon", "auchan garibaldi"),
+        "Auchan Supermarché City Lyon Université": ("auchan supermarche city lyon universite", "auchan lyon universite"),
+        "King Jouet Lyon Grolée": ("king jouet lyon grolee", "king jouet lyon grolée"),
+        "King Dultes Lyon Part-Dieu": ("king dultes lyon part dieu", "king dultes part dieu"),
+        "King Jouet Boutique Lyon 4ème": ("king jouet boutique lyon 4eme", "king jouet lyon 4eme"),
+        "King Jouet Orchestra Lyon/Carré de Soie": (
+            "king jouet orchestra lyon/carre de soie", "king jouet orchestra carre de soie", "king jouet carre de soie",
+            "king jouet vaulx-en-velin", "king jouet vaulx en velin", "king jouet 1 avenue de bohlen", "king jouet 1 av de bohlen",
+        ),
+        "King Jouet Caluire": ("king jouet caluire", "king jouet 2 montee des soldats"),
+        "King Jouet Givors": ("king jouet givors", "king jouet centre commercial des 2 vallees"),
         "Smyths Toys Bron": ("smyths toys bron",),
-        "JouéClub Lyon Confluence": ("jouéclub lyon confluence", "joueclub lyon confluence"),
-        "La Grande Récré LYON": ("la grande récré lyon", "la grande recre lyon"),
-        "Micromania - Zing LYON CENTRE VILLE": ("micromania - zing lyon centre ville", "micromania lyon centre ville"),
-        "Micromania - Zing LYON PART DIEU": ("micromania - zing lyon part dieu", "micromania lyon part dieu"),
-        "Micromania - Zing LYON GRENETTE": ("micromania - zing lyon grenette", "micromania lyon grenette"),
+        "JouéClub Lyon Confluence": ("joueclub lyon confluence", "joueclub lyon"),
+        "La Grande Récré LYON La Part Dieu": ("la grande recre la part dieu", "la grande recre lyon la part dieu", "la grande recre lyon"),
+        "Micromania - Zing LYON CENTRE VILLE": ("micromania zing lyon centre ville", "micromania lyon centre ville"),
+        "Micromania - Zing LYON PART DIEU": ("micromania zing lyon part dieu", "micromania lyon part dieu"),
+        "Micromania - Zing LYON GRENETTE": ("micromania zing lyon grenette", "micromania lyon grenette"),
     }
+
+    # 1) Données structurées : utile lorsque le magasin est rendu par JS mais
+    # que son état reste présent dans __NEXT_DATA__ ou JSON-LD.
     stores = []
+    try:
+        blobs = []
+        m = NEXT_DATA_RE.search(html)
+        if m:
+            blobs.append(json.loads(m.group(1)))
+        for data in _ld_nodes(html):
+            blobs.append(data)
+
+        for data in blobs:
+            for node in _walk(data):
+                if not isinstance(node, dict):
+                    continue
+                flat = norm_text(" ".join(str(v) for v in node.values() if isinstance(v, (str, int, float, bool))))
+                if not flat:
+                    continue
+                for store, variants in aliases.items():
+                    if any(v in flat for v in variants):
+                        # Booléens/noms de champs fréquemment rencontrés dans
+                        # les fiches magasin des enseignes.
+                        available_true = False
+                        available_false = False
+                        for key, value in node.items():
+                            k = norm_text(key)
+                            if isinstance(value, bool):
+                                if value and any(token in k for token in ("stock", "available", "disponib", "in_stock", "pickup", "retrait", "reservation")):
+                                    available_true = True
+                                if not value and any(token in k for token in ("stock", "available", "disponib", "in_stock", "pickup", "retrait", "reservation")):
+                                    available_false = True
+                        if available_true or any(marker in flat for marker in explicit_in):
+                            stores.append(store)
+                        elif available_false and any(marker in flat for marker in explicit_out):
+                            pass
+                        break
+    except Exception:
+        pass
+
+    def positive_context(text: str) -> bool:
+        # Évite de considérer "indisponible en magasin" comme
+        # "disponible en magasin".
+        if any(x in text for x in explicit_out):
+            # Les signaux non ambigus restent valables : "en rayon",
+            # "retrait en 2h", "stock en magasin", etc.
+            strong = tuple(x for x in explicit_in if x not in (
+                "disponible en magasin", "disponible dans votre magasin",
+                "disponible dans ce magasin", "disponible dans le magasin",
+            ))
+            return any(x in text for x in strong)
+        return any(x in text for x in explicit_in)
+
+    # 2) HTML visible/attributs : le signal le plus courant sur Fnac/King Jouet.
     for store, variants in aliases.items():
         for variant in variants:
             pos = low.find(variant)
             if pos < 0:
                 continue
-            context = low[max(0, pos - 1200):min(len(low), pos + 1800)]
-            if any(marker in context for marker in explicit_in):
+            context = low[max(0, pos - 1800):min(len(low), pos + 2600)]
+            if positive_context(context):
                 stores.append(store)
                 break
 
+    stores = list(dict.fromkeys(stores))
+
+    # Smyths est particulièrement sensible aux faux positifs : une fiche peut
+    # afficher "Click & Collect" sans que le magasin sélectionné ait réellement
+    # du stock. On exige donc un signal fort dans le voisinage du magasin.
+    if "smythstoys" in retailer.lower() or "smyths" in low:
+        strict_stores = []
+        strong_smyths = (
+            "en stock en magasin", "stock en magasin", "disponible en magasin",
+            "en rayon", "available to collect", "available for collection",
+            "available in store", "in stock at", "in stock in store",
+            "retrait sous 2h", "retrait en 2h",
+        )
+        for store in stores:
+            variants = aliases.get(store, ())
+            for variant in variants:
+                pos = low.find(variant)
+                if pos >= 0:
+                    context = low[max(0, pos - 1800):min(len(low), pos + 2600)]
+                    if any(x in context for x in strong_smyths) and not any(x in context for x in explicit_out):
+                        strict_stores.append(store)
+                        break
+        stores = list(dict.fromkeys(strict_stores))
+
     if stores:
-        return "in", list(dict.fromkeys(stores))
+        return "in", stores
     if has_out and not has_in:
         return "out", []
     if has_in:
-        # La fiche indique du stock/retrait magasin, mais pas de magasin Lyon
-        # explicitement exploitable.
         return "possible", []
     return None, []
 
 def physical_result(product: dict, html: str) -> dict:
-    status, stores = _physical_status_from_html(html)
+    retailer = urlparse(product.get("url", "")).netloc.lower()
+    status, stores = _physical_status_from_html(html, retailer)
     return {
         "physical_status": status,
         "physical_stores": stores,
@@ -723,13 +840,16 @@ def physical_result(product: dict, html: str) -> dict:
 
 def _physical_alert_body(result: dict) -> str:
     stores = result.get("physical_stores") or []
-    where = ", ".join(stores) if stores else "un magasin de la zone Lyon (sans magasin précis exposé)"
+    if stores:
+        where = "\n".join(f"🟢 {store} : STOCK DÉTECTÉ" for store in stores)
+    else:
+        where = "🟡 Stock magasin détecté, mais magasin précis non exposé"
     price = result.get("price")
     price_text = f"Prix en ligne : {price:.2f} €" if isinstance(price, (int, float)) else "Prix en ligne : non déterminé"
     return (
         f"🏬 STOCK MAGASIN DÉTECTÉ — {result['name']}\n"
         f"Zone : {PHYSICAL_STORE_RADIUS_LABEL}\n"
-        f"Magasin(s) : {where}\n"
+        f"{where}\n"
         f"{price_text}\n"
         f"{result['url']}\n\n"
         "Vérification finale conseillée sur la page du magasin avant de te déplacer."
@@ -1435,6 +1555,7 @@ def discover_via_search_engines(products: list[dict]) -> list[dict]:
                     "name": f"{retailer} - {title}",
                     "url": clean,
                     "reference_price": reference_price,
+                    "reference_source": retailer,
                     "price": reference_price,
                     "status": status,
                     "source": source,
