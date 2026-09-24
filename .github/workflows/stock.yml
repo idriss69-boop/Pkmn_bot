@@ -4,13 +4,12 @@ on:
   schedule:
     # S'exécute toutes les 5 minutes
     - cron: '*/5 * * * *'
-  workflow_dispatch: # Permet le lancement manuel depuis l'onglet Actions
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
-    # Indispensable pour donner les droits d'écriture au bot et éviter l'erreur 128
     permissions:
       contents: write
 
@@ -33,9 +32,22 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python pokemon_stock_bot.py --once
 
+      - name: Préparer les fichiers de sauvegarde
+        run: |
+          touch discovered_products.txt
+
       - name: Sauvegarder les produits découverts sur GitHub
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add products.txt discovered_products.txt stock_state.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto: mise à jour des produits et de l'état" && git push)
+
+          git add products.txt
+          git add discovered_products.txt
+          git add stock_state.json
+
+          if git diff --cached --quiet; then
+            echo "Aucun changement à sauvegarder."
+          else
+            git commit -m "Auto: mise à jour des produits et de l'état"
+            git push
+          fi
