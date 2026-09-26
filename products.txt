@@ -117,3 +117,16 @@ La Grande Recre - OP-17 Double Pack | https://www.lagranderecre.fr/jeux-de-socie
 # Bandai n'a pas encore donné de date officielle ni ouvert de page produit en France
 # (aucune enseigne FR n'a de fiche produit active pour le moment). Repasse compléter cette
 # section dès que les précommandes ouvrent (généralement 4 à 8 semaines avant la sortie).
+
+# Produits découverts automatiquement — prix enseigne
+Auchan - Pokémon | https://www.auchan.fr/marques/pokemon/ca-55409?categorylevel3=jeux20de20socie9te9&sort=default&brand=brandasmodee&brand=brandpokemon | 12.00
+Auchan - Pokémon | https://www.auchan.fr/marques/pokemon/ca-55409?sort=default&categorylevel3=jeux20de20socie9te9 | 12.00
+King Jouet - Pokemon Asmodée - King Jouet France | https://www.king-jouet.com/jeux-jouets/marque-asmodee/Pokemon/page1.htm | 56.00
+King Jouet - Nouveautés Pokemon Asmodée - King Jouet France | https://www.king-jouet.com/jeux-jouets/nouveautes/marque-asmodee/Pokemon/page1.htm | 50.00
+JouéClub - Pokemon - coffret ex special collection 5 boosters, 2 cartes promos sir, 1 cartes promo - pokemon - jouéclub | https://www.joueclub.fr/pokemon/pokemon-coffret-ex-special-collection-5-boosters-2-cartes-promos-sir-1-cartes-promo-0196214109186.html | 39.99
+JouéClub - L' academie de combat (2eme edition) - pokemon - jouéclub | https://www.joueclub.fr/pokemon/l-academie-de-combat-2eme-edition-0820650554247.html | 29.99
+La Grande Récré - Déguisement combinaison Pokémon Evoli - Taille 7-8 ans | https://www.lagranderecre.fr/anniversaire-et-deguisements/deguisements/deguisements-personnages/deguisement-combinaison-pokemon-evoli-taille-7-8-ans.html | 32.99
+La Grande Récré - Déguisement combinaison Pokémon Evoli 10-12 ans | https://www.lagranderecre.fr/anniversaire-et-deguisements/deguisements/deguisements-personnages/deguisement-combinaison-pokemon-evoli-10-12-ans.html | 32.99
+La Grande Récré - Coffret Papeterie Set d'écriture Pokemon | https://www.lagranderecre.fr/cadeaux-et-decoration/papeterie/coffret-papeterie-set-d-ecriture-pokemon.html | 16.99
+La Grande Récré - Déguisement combinaison Pokémon Pikachu - Taille 10-12 ans | https://www.lagranderecre.fr/anniversaire-et-deguisements/deguisements/deguisements-personnages/deguisement-combinaison-pokemon-pikachu-taille-10-12-ans.html | 32.99
+La Grande Récré - Valise cabine Pokemon - Pikachu Neon | https://www.lagranderecre.fr/cadeaux-et-decoration/bagagerie/valise-cabine-pokemon-pikachu-neon.html | 59.99
