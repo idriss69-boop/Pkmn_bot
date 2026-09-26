@@ -6,6 +6,12 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+# Évite que deux exécutions du bot se chevauchent et tentent
+# de modifier GitHub en même temps.
+concurrency:
+  group: pokemon-stock-bot
+  cancel-in-progress: false
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -16,6 +22,8 @@ jobs:
     steps:
       - name: Récupérer le code du dépôt
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configurer Python
         uses: actions/setup-python@v5
@@ -38,8 +46,8 @@ jobs:
 
       - name: Sauvegarder les produits découverts sur GitHub
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add products.txt
           git add discovered_products.txt
@@ -47,7 +55,29 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "Aucun changement à sauvegarder."
-          else
-            git commit -m "Auto: mise à jour des produits et de l'état"
-            git push
+            exit 0
           fi
+
+          git commit -m "Auto: mise à jour des produits et de l'état"
+
+          # Le dépôt peut avoir reçu un commit entre le checkout et le push.
+          # On récupère donc l'état distant et on rejoue notre commit dessus.
+          git fetch origin main
+          git rebase origin/main
+
+          # Nouvelle tentative de push après synchronisation.
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "Sauvegarde GitHub effectuée."
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "Le dépôt a changé entre-temps. Nouvelle synchronisation (tentative $((attempt + 1))/3)..."
+              git fetch origin main
+              git rebase origin/main
+            fi
+          done
+
+          echo "Impossible de pousser les sauvegardes après 3 tentatives."
+          exit 1
