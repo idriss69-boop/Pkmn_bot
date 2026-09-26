@@ -1,5 +1,5 @@
 {
-  "last_catalog_discovery": 1790454616.2635787,
+  "last_catalog_discovery": 1790455113.401575,
   "last_config_alert": 0,
   "last_crash_alert": 0,
   "last_discovery": 1790455729.5120404,
@@ -713,7 +713,7 @@
       "cooldown_until": 1790456171.7011716,
       "errors": 0,
       "last_http_status": 200,
-      "last_price": 26.9,
+      "last_price": 5.0,
       "name": "Fnac - coffret poster 30 ans",
       "next_check": 1790456171.7011716,
       "physical_checked_at": 0,
@@ -721,8 +721,8 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790230802.763565,
-      "status": "out",
+      "problem_since": 0,
+      "status": "in",
       "url": "https://www.fnac.com/Cartes-a-collectionner-Pokemon-30A-Coffret-Poster/a23200285/w-4#omnsearchpos=1",
       "weak_hits": 0
     },
