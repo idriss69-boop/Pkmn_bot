@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Bot de surveillance Pokémon / One Piece TCG — V15
+Bot de surveillance Pokémon / One Piece TCG — V16
 - Surveillance stock/prix
-- Découverte multi-enseignes via catalogues directs + Google/Bing
-- Découverte élargie des boutiques TCG indépendantes
+- Découverte multi-enseignes via Google/Bing
 - Détection renforcée des portfolios/classeurs/binders
 - Journal réel des découvertes dans discovered_products.txt
 - Auto-ajout dans products.txt
 - Scan stock magasin Lyon
 - Gestion ntfy, prix, cooldowns et état persistant
 
-V16 : recherche française TCG stricte, catalogues directs des grandes enseignes et découverte des boutiques TCG indépendantes ; les prix des indépendants ne servent jamais de référence ; corrige notamment les cas où une fiche comme
+V16 : ajoute une découverte directe des catalogues et corrige notamment les cas où une fiche comme
 "Smyths Toys - Pokémon - Portfolio avec Boosters - Modèle Aléatoire"
 est trouvée mais rejetée parce que "portfolio" n'était pas reconnu.
 """
@@ -98,21 +97,12 @@ DISCOVERY_MAX_PER_HOST = int(os.environ.get("DISCOVERY_MAX_PER_HOST", "12"))
 DISCOVERY_TIMEOUT = int(os.environ.get("DISCOVERY_TIMEOUT", "12"))
 DISCOVERY_EVERY = int(os.environ.get("DISCOVERY_EVERY", "180"))
 
-# V16 : découverte directe des catalogues/pages TCG des enseignes.
+# V17 : découverte directe + filtrage TCG strict + protection marketplace des catalogues/pages TCG des enseignes.
 CATALOG_DISCOVERY_ENABLED = os.environ.get("CATALOG_DISCOVERY_ENABLED", "1") != "0"
 CATALOG_DISCOVERY_EVERY = int(os.environ.get("CATALOG_DISCOVERY_EVERY", "1800"))
 CATALOG_MAX_PAGES_PER_HOST = int(os.environ.get("CATALOG_MAX_PAGES_PER_HOST", "2"))
 CATALOG_MAX_PRODUCTS_PER_HOST = int(os.environ.get("CATALOG_MAX_PRODUCTS_PER_HOST", "12"))
 CATALOG_FETCH_WORKERS = int(os.environ.get("CATALOG_FETCH_WORKERS", "6"))
-
-# V16 : découverte élargie des boutiques TCG indépendantes.
-# Important : leurs prix ne servent JAMAIS de prix de référence.
-INDEPENDENT_DISCOVERY_ENABLED = os.environ.get("INDEPENDENT_DISCOVERY_ENABLED", "1") != "0"
-INDEPENDENT_MAX_PRODUCTS_PER_HOST = int(os.environ.get("INDEPENDENT_MAX_PRODUCTS_PER_HOST", "6"))
-INDEPENDENT_FETCH_WORKERS = int(os.environ.get("INDEPENDENT_FETCH_WORKERS", "4"))
-INDEPENDENT_SEARCH_RESULTS = int(os.environ.get("INDEPENDENT_SEARCH_RESULTS", "8"))
-INDEPENDENT_SEARCH_QUERIES = int(os.environ.get("INDEPENDENT_SEARCH_QUERIES", "4"))
-INDEPENDENT_PRICE_RETRY_MAX = int(os.environ.get("INDEPENDENT_PRICE_RETRY_MAX", "4"))
 
 SEARCH_DISCOVERY_ENABLED = os.environ.get("SEARCH_DISCOVERY_ENABLED", "1") != "0"
 SEARCH_ENGINE = os.environ.get("SEARCH_ENGINE", "both").lower()
@@ -279,7 +269,124 @@ def _decide(keys):
             return status, kinds
     return None, kinds
 
-def classify(html: str):
+def _retailer_from_url(url: str) -> str:
+    host = urlparse(url or "").netloc.lower().split(":")[0].lstrip("www.")
+    mapping = {
+        "fnac.com": "fnac", "carrefour.fr": "carrefour", "auchan.fr": "auchan",
+        "cultura.com": "cultura", "king-jouet.com": "kingjouet",
+        "smythstoys.com": "smythstoys", "joueclub.fr": "joueclub",
+        "lagranderecre.fr": "lagranderecre", "micromania.fr": "micromania",
+    }
+    return mapping.get(host, host)
+
+MARKETPLACE_TERMS = (
+    "vendeur partenaire", "vendeuse partenaire", "offre partenaire",
+    "vendu par", "vendue par", "vendu et livre par", "vendue et livree par",
+    "vendu et expedie par", "vendue et expediee par", "marketplace",
+    "autres offres", "plus d'offres", "plusieurs vendeurs",
+    "seller", "sold by", "third party", "third-party",
+)
+
+DIRECT_RETAILER_TERMS = (
+    "en stock en ligne", "disponible en ligne", "vendu par fnac", "vendu et livre par fnac",
+    "vendu et expedie par fnac", "vendu par carrefour", "vendu et livre par carrefour",
+    "vendu par auchan", "vendu et livre par auchan",
+    "vendu par cultura", "vendu et livre par cultura",
+    "vendu par king jouet", "vendu et livre par king jouet",
+    "vendu par smyths", "vendu et livre par smyths",
+    "vendu par joueclub", "vendu et livre par joueclub",
+    "vendu par la grande recre", "vendu par micromania",
+)
+
+def _official_offer_status(html: str, retailer: str = ""):
+    """Retourne le stock de l'offre officielle quand la page expose ses offres.
+
+    On ne mélange jamais une offre vendeur tiers avec l'offre de l'enseigne.
+    """
+    official = []
+    third_party = []
+    has_seller_offers = False
+    for data in _ld_nodes(html):
+        for node in _walk(data):
+            if not isinstance(node, dict):
+                continue
+            offers = node.get("offers")
+            if isinstance(offers, dict):
+                offers = [offers]
+            if not isinstance(offers, list):
+                continue
+            for offer in offers:
+                if not isinstance(offer, dict):
+                    continue
+                availability = offer.get("availability")
+                if not isinstance(availability, str):
+                    continue
+                seller = offer.get("seller")
+                seller_name = (seller.get("name") if isinstance(seller, dict) else
+                               seller if isinstance(seller, str) else "")
+                if seller_name:
+                    has_seller_offers = True
+                    if _seller_matches_retailer(seller_name, retailer):
+                        official.append(_norm(availability))
+                    else:
+                        third_party.append(_norm(availability))
+                else:
+                    # Offre sans vendeur explicite : exploitable seulement si
+                    # la page n'est pas identifiée comme marketplace-only.
+                    official.append(_norm(availability))
+    status, _ = _decide(official)
+    if status:
+        return status
+    # Aucune offre officielle : surtout ne pas transformer l'offre
+    # d'un vendeur tiers en "stock enseigne". Le niveau marketplace sera
+    # déterminé séparément par _marketplace_only().
+    return None
+
+def _marketplace_only(html: str, retailer: str = "") -> bool:
+    if not html:
+        return False
+    low = normalize_text(html)
+    # Une offre officielle structurée a priorité sur les mentions marketplace.
+    structured_official = _official_offer_status(html, retailer)
+    if structured_official:
+        return False
+
+    partner = any(x in low for x in MARKETPLACE_TERMS)
+    if not partner:
+        return False
+
+    wanted = compact(retailer)
+    # Fnac expose très clairement la différence entre son stock et
+    # "En stock vendeur partenaire". C'est le cas qui nous a généré les faux positifs.
+    if wanted == "fnac":
+        direct_stock = any(x in low for x in (
+            "en stock en ligne", "disponible en ligne",
+            "vendu par fnac", "vendu et livre par fnac",
+            "vendu et expedie par fnac",
+        ))
+        partner_only = any(x in low for x in (
+            "en stock vendeur partenaire", "disponible vendeur partenaire",
+            "vendu par un vendeur partenaire", "offre partenaire",
+        ))
+        return partner_only and not direct_stock
+
+    # Pour les autres enseignes, on exige soit une offre officielle structurée,
+    # soit une mention explicite que l'enseigne vend elle-même.
+    direct_named = any(x in low for x in DIRECT_RETAILER_TERMS)
+    if direct_named:
+        return False
+
+    # Si la page contient un vendeur tiers mais aucune preuve de vendeur officiel,
+    # on ferme par défaut : pas de notification sur une offre ambiguë.
+    return True
+
+def classify(html: str, retailer: str = ""):
+    official_status = _official_offer_status(html, retailer)
+    if official_status:
+        return official_status, "official-offer"
+    if _marketplace_only(html, retailer):
+        return "out", "marketplace"
+
     status, _ = _decide(_ld_availability(html))
     if status:
         return status, "schema"
@@ -312,6 +419,19 @@ def classify(html: str):
 # CANDIDATS PRODUITS
 # ---------------------------------------------------------------------------
 
+ENGLISH_TCG_MARKERS = (
+    "anglais", "english", "version anglaise", "version english",
+    "en anglais", "in english", "langue anglaise", "english version",
+    "booster anglais", "boosters anglais", "cartes anglaises",
+    "cartes en anglais", "cards in english", "english cards",
+)
+
+def _is_explicitly_english_tcg(title: str, url: str = "") -> bool:
+    # On regarde uniquement titre + URL : le footer d'un site français peut
+    # naturellement contenir "English" pour changer de langue.
+    hay = normalize_text(f"{title} {url}")
+    return _has_any(hay, ENGLISH_TCG_MARKERS)
+
 POKEMON_PRODUCT_TERMS = (
     # Signaux TCG forts
     "etb", "elite trainer box", "coffret", "booster", "display",
@@ -331,14 +451,23 @@ POKEMON_PRODUCT_TERMS = (
 # stricts afin qu'une catégorie générale Pokémon (351+ articles chez certaines
 # enseignes) ne transforme pas LEGO, peluches, figurines, etc. en candidats TCG.
 POKEMON_TCG_BLOCK_TERMS = (
-    "lego", "peluche", "peluche", "figurine", "funko", "tonies", "tonie",
-    "lampe", "veilleuse", "montre", "reveil", "réveil", "puzzle",
-    "toupie", "spinner", "megablocks", "mega bloks", "mega bloks",
+    "lego", "peluche", "figurine", "funko", "tonies", "tonie",
+    "lampe", "veilleuse", "montre", "reveil", "puzzle",
+    "toupie", "spinner", "megablocks", "mega bloks",
     "jeu de société", "jeu de societe", "cherche et trouve", "livre",
-    "roman", "manga", "sticker", "autocollant", "vetement", "vêtement",
-    "chaussette", "sac à dos", "sac a dos", "gourde", "mug", "lampe",
-    "ceinture de dresseur", "clip n' go", "clip n go", "accessoire",
+    "roman", "manga", "sticker", "autocollant", "vetement",
+    "chaussette", "sac à dos", "sac a dos", "cartable", "trousse",
+    "cahier", "agenda", "stylo", "crayon", "gomme", "regle",
+    "fournitures scolaires", "papeterie", "gourde", "mug",
+    "ceinture de dresseur", "clip n' go", "clip n go",
     "jouet à construire", "jouet a construire", "set de construction",
+    "chaussure", "casquette", "pyjama", "linge", "sac à main",
+)
+
+POKEMON_SCHOOL_TERMS = (
+    "cartable", "sac à dos", "sac a dos", "trousse", "cahier", "agenda",
+    "stylo", "crayon", "gomme", "regle", "règle", "fournitures scolaires",
+    "papeterie", "sacoche scolaire", "pochette scolaire", "emploi du temps",
 )
 
 # Termes qui prouvent beaucoup mieux qu'une fiche est bien du JCC Pokémon.
@@ -352,46 +481,13 @@ POKEMON_TCG_STRONG_TERMS = (
     "portfolio", "classeur", "binder", "range-cartes", "range cartes",
 )
 
-# One Piece : références FR recherchées. Les noms de sets anglais ne sont
-# volontairement PAS utilisés dans les requêtes de découverte.
 ONEPIECE_PRODUCT_TERMS = (
-    "ts-03", "ts03", "ts 03", "tin pack", "boîte métal", "boite metal",
-    "boîte métallique", "boite metallique",
     "op-17", "op17", "op 17", "op-18", "op18", "op 18",
-    "op-19", "op19", "op 19",
+    "op-19", "op19", "op 19", "the dominance of god", "dominance of god",
     "duo pack", "duo-pack", "double pack", "double-pack",
     "booster", "display", "booster box", "box", "pack", "deck",
     "starter deck", "double pack",
 )
-
-# Un produit explicitement identifié comme anglais est rejeté. On ne demande
-# pas la présence obligatoire du mot "français" : de nombreuses fiches FR
-# n'indiquent pas la langue, surtout chez les grandes enseignes françaises.
-ENGLISH_TCG_MARKERS = (
-    "anglais", "anglaise", "english", "en anglais",
-    "version anglaise", "version anglaise", "english version",
-    "english edition", "uk version", "us version",
-)
-
-def _is_explicitly_english_tcg(title: str = "", url: str = "", html: str = "") -> bool:
-    # Ne regarde pas tout le HTML : une enseigne peut avoir un bouton
-    # de langue "English" dans son footer sans que le produit soit anglais.
-    title_url = normalize_text(f"{title} {url}")
-    if any(normalize_text(x) in title_url for x in ENGLISH_TCG_MARKERS):
-        return True
-    visible = _visible_product_text(html, 20000) if html else ""
-    # On exige un contexte produit autour du marqueur anglais.
-    for marker in ENGLISH_TCG_MARKERS:
-        m = normalize_text(marker)
-        if m not in visible:
-            continue
-        for context_word in (
-            "version", "edition", "édition", "langue", "language",
-            "carte", "cartes", "cards", "booster", "display", "pack", "deck",
-        ):
-            if re.search(rf"{re.escape(context_word)}.{{0,45}}{re.escape(m)}|{re.escape(m)}.{{0,45}}{re.escape(context_word)}", visible):
-                return True
-    return False
 
 ONEPIECE_TCG_BLOCK_TERMS = (
     "figurine", "peluche", "funko", "lego", "mug", "vetement",
@@ -401,23 +497,24 @@ ONEPIECE_TCG_BLOCK_TERMS = (
 
 DISCOVERY_WATCH_TERMS = (
     "30e anniversaire", "30eme anniversaire", "30ème anniversaire",
+    "30th anniversary", "30th-anniversary", "30th celebration",
     "30 ans", "30ans", "30 ans pokemon", "pokemon 30 ans",
     "portfolio", "classeur", "binder", "album",
     "one piece card game", "one piece tcg",
-    "ts-03", "ts03", "ts 03", "tin pack",
     "op-17", "op17", "op 17", "op-18", "op18", "op 18",
-    "op-19", "op19", "op 19",
-    "règne delta", "regne delta", "me06",
+    "op-19", "op19", "op 19", "the dominance of god", "dominance of god",
+    "règne delta", "regne delta", "delta reign", "me06",
 )
 
 DROP_PRIORITY_TERMS = (
-    "op17", "op-17", "op 17", "op18", "op-18", "op 18",
-    "op19", "op-19", "op 19",
-    "ts03", "ts-03", "ts 03", "tin pack",
+    "op17", "op-17", "op 17", "double pack", "double-pack",
+    "duo pack", "duo-pack", "op18", "op-18", "op 18",
+    "op19", "op-19", "op 19", "the dominance of god", "dominance of god",
     "30e anniversaire", "30ème anniversaire", "30eme anniversaire",
+    "30th anniversary", "30th-anniversary", "30th celebration",
     "30 ans", "30ans", "30 ans pokemon", "pokemon 30 ans",
     "portfolio", "classeur", "binder", "album",
-    "règne delta", "regne delta", "me06",
+    "règne delta", "regne delta", "delta reign", "me06",
 )
 DROP_PRIORITY_INTERVAL = int(os.environ.get("DROP_PRIORITY_INTERVAL", "10"))
 
@@ -434,61 +531,65 @@ def _has_any(text: str, terms) -> bool:
     return any(normalize_text(term) in text for term in terms)
 
 def is_relevant_pokemon_candidate(title: str, url: str = "", html: str = "") -> bool:
-    if _is_explicitly_english_tcg(title, url, html):
-        return False
     title_url = normalize_text(f"{title} {url}")
     visible = _visible_product_text(html)
-    pokemon = _has_any(title_url, (
-        "pokemon", "pokémon", "pokemon tcg", "pokémon tcg",
-        "pokemon jcc", "pokémon jcc",
-    )) or _has_any(visible[:30000], (
-        "pokemon tcg", "pokémon tcg", "pokemon jcc", "pokémon jcc"
-    ))
-    if not pokemon:
+    if _is_explicitly_english_tcg(title, url):
+        return False
+    if not _has_any(title_url, ("pokemon", "pokémon", "pokemon tcg", "pokémon tcg", "pokemon jcc", "pokémon jcc")):
         return False
 
+    # Sécurité principale : le TITRE/URL doit porter le produit TCG.
+    # Une mention "Pokémon TCG" dans les produits associés ou le footer ne suffit plus.
+    if _has_any(title_url, POKEMON_SCHOOL_TERMS):
+        return False
     title_blocked = _has_any(title_url, POKEMON_TCG_BLOCK_TERMS)
     title_has_tcg = _has_any(title_url, POKEMON_PRODUCT_TERMS)
-    content_has_tcg = _has_any(visible[:50000], POKEMON_TCG_STRONG_TERMS)
+    generic_storage = _has_any(title_url, ("portfolio", "classeur", "binder", "album", "range-cartes", "range cartes"))
+    explicit_card_context = _has_any(title_url, (
+        "cartes", "cards", "booster", "boosters", "pokemon tcg", "pokemon jcc",
+        "jeu de cartes", "cartes à collectionner", "cartes a collectionner",
+    ))
 
     if title_blocked and not title_has_tcg:
         return False
 
-    generic_storage = _has_any(title_url, (
-        "portfolio", "classeur", "binder", "album", "range-cartes", "range cartes"
-    ))
     if generic_storage:
-        return pokemon and (
-            content_has_tcg or _has_any(title_url, (
-                "booster", "boosters", "cartes", "cards",
-                "pokemon tcg", "pokemon jcc"
-            ))
-        )
+        # Un classeur/portfolio reste autorisé, mais uniquement s'il est
+        # explicitement lié aux cartes/boosters/JCC dans le titre.
+        return bool(explicit_card_context or _has_any(visible[:50000], (
+            "pokemon tcg", "pokémon tcg", "pokemon jcc", "pokémon jcc",
+            "cartes à collectionner", "cartes a collectionner", "booster",
+        )))
 
     if title_has_tcg and not title_blocked:
         return True
-    return content_has_tcg and not title_blocked
+
+    # Fiche sans terme produit clair : le contenu doit au minimum confirmer
+    # le JCC et ne pas ressembler à une fourniture scolaire/merchandising.
+    content_has_tcg = _has_any(visible[:50000], POKEMON_TCG_STRONG_TERMS)
+    return bool(content_has_tcg and explicit_card_context and not title_blocked)
 
 def is_relevant_onepiece_candidate(title: str, url: str = "", html: str = "") -> bool:
-    if _is_explicitly_english_tcg(title, url, html):
-        return False
     title_url = normalize_text(f"{title} {url}")
     visible = _visible_product_text(html)
-    one_piece = (
-        _has_any(title_url, ("one piece", "onepiece", "one-piece"))
-        or _has_any(visible[:30000], ("one piece card game", "one piece tcg"))
-    )
-    if not one_piece:
+    if _is_explicitly_english_tcg(title, url):
         return False
-    blocked = _has_any(title_url, ONEPIECE_TCG_BLOCK_TERMS)
-    strong = (
-        _has_any(title_url, ONEPIECE_PRODUCT_TERMS)
-        or _has_any(visible[:50000], (
-            "one piece card game", "one piece tcg", "booster", "display",
-            "starter deck", "deck", "ts-03", "ts03", "tin pack"
-        ))
-    )
-    return bool(strong and not blocked)
+    if not _has_any(title_url, ("one piece", "onepiece", "one-piece")):
+        return False
+    if _has_any(title_url, ONEPIECE_TCG_BLOCK_TERMS):
+        return False
+    # Français uniquement : on garde les références TCG, mais on ne valide pas
+    # un produit générique parce que la page contient simplement "One Piece".
+    title_has_tcg = _has_any(title_url, ONEPIECE_PRODUCT_TERMS)
+    title_card = _has_any(title_url, (
+        "one piece tcg", "one piece card game", "booster", "display", "deck",
+        "starter", "pack", "box", "op-17", "op-18", "op-19", "tin pack",
+    ))
+    content_card = _has_any(visible[:50000], (
+        "one piece card game", "one piece tcg", "booster", "display",
+        "starter deck", "deck", "op-17", "op-18", "op-19", "tin pack",
+    ))
+    return bool((title_has_tcg or title_card or content_card) and not _has_any(title_url, ONEPIECE_TCG_BLOCK_TERMS))
 
 # ---------------------------------------------------------------------------
 # PRIX
@@ -697,6 +798,10 @@ def load_products():
             print(f"! ligne {line_no} ignorée: format attendu 'Nom | URL | prix_normal'")
             continue
         name, url = match.group(1).strip(), match.group(2).strip()
+        title_url = normalize_text(f"{name} {url}")
+        if _has_any(title_url, POKEMON_SCHOOL_TERMS) and _has_any(title_url, ("pokemon", "pokémon")):
+            print(f"! ligne {line_no} ignorée: article Pokémon hors TCG (fourniture scolaire).")
+            continue
         price = parse_price(match.group(3))
         if price is None:
             continue
@@ -866,10 +971,15 @@ def check_one(product):
               "physical_stores": [], "physical_checked_at": 0}
     try:
         html = fetch(product["url"])
-        result["status"], result["source"] = classify(html)
+        retailer = _retailer_from_url(product["url"])
+        result["status"], result["source"] = classify(html, retailer)
         if PRICE_FILTER_ENABLED:
             result["price"] = extract_price(html)
-        if PHYSICAL_STOCK_ENABLED:
+        if _marketplace_only(html, retailer):
+            result["marketplace_only"] = True
+            result["physical_status"] = None
+            result["physical_stores"] = []
+        elif PHYSICAL_STOCK_ENABLED:
             result.update(physical_result(product, html))
     except FetchError as exc:
         result["error"] = str(exc)
@@ -928,6 +1038,12 @@ def process_result(state, result):
     entry["last_http_status"] = 200
     entry["status"] = result["status"]
     entry["last_price"] = result["price"]
+
+    if result.get("marketplace_only") or result.get("source") == "marketplace":
+        print(f"  -> offre vendeur tiers ignorée: {result['name']}")
+        entry["alerted"], entry["weak_hits"] = False, 0
+        schedule_next(entry, result, now)
+        return
 
     maybe_notify_physical(state, result)
 
@@ -1075,10 +1191,7 @@ DISCOVERY_RETAILERS = {
 
 # Pages catalogue officielles connues. Elles complètent Google/Bing.
 CATALOG_SEEDS = {
-    "fnac.com": [
-        "https://www.fnac.com/n529205/Jeux-de-recre-cartes-a-collectionner/Cartes-Pokemon",
-        "https://www.fnac.com/n564773/Jeux-de-recre-cartes-a-collectionner/Cartes-a-collectionner-One-Piece",
-    ],
+    "fnac.com": ["https://www.fnac.com/n529205/Jeux-de-recre-cartes-a-collectionner/Cartes-Pokemon"],
     "carrefour.fr": ["https://www.carrefour.fr/s?q=pokemon%20cartes"],
     "auchan.fr": ["https://www.auchan.fr/pokemon/ep-pokemon"],
     "cultura.com": [
@@ -1092,39 +1205,11 @@ CATALOG_SEEDS = {
     "smythstoys.com": [
         "https://www.smythstoys.com/fr/fr-fr/jouets/jeux-de-societe-et-puzzles/cartes-a-collectionner/cartes-pokemon/c/SM1301061101",
         "https://www.smythstoys.com/fr/fr-fr/jouets/jeux-de-societe-et-puzzles/cartes-a-collectionner/cartes-pokemon/nouveautes-cartes-pokemon/c/nouveautes-cartes-pokemon",
-        "https://www.smythstoys.com/fr/fr-fr/jouets/jeux-de-societe-et-puzzles/cartes-a-collectionner/cartes-one-piece/c/SM1301061106",
     ],
     "joueclub.fr": ["https://www.joueclub.fr/contenu/les-cartes-pokemon.html"],
     "lagranderecre.fr": ["https://www.lagranderecre.fr/jouet-pokemon.html"],
 }
 CATALOG_DOMAIN_RETAILERS = {domain: DISCOVERY_RETAILERS[domain][0] for domain in CATALOG_SEEDS}
-
-# Boutiques TCG indépendantes : elles servent à découvrir des fiches, mais
-# leur prix n'est pas appris comme prix normal. Une fiche indépendante est
-# conservée dans discovered_products.txt puis promue dans products.txt
-# seulement lorsqu'un prix de référence est retrouvé chez une grande enseigne.
-INDEPENDENT_CATALOG_SEEDS = {
-    "black-rocket.fr": ("Black Rocket", ["https://www.black-rocket.fr/"]),
-    "blazingtail.fr": ("Blazing Tail", ["https://www.blazingtail.fr/"]),
-    "arakemon.com": ("Arakemon", ["https://www.arakemon.com/"]),
-    "shop-tcg.fr": ("Shop TCG", ["https://shop-tcg.fr/boutique/"]),
-    "destocktcg.fr": ("DestockTCG", ["https://www.destocktcg.fr/"]),
-    "dgcardgame.com": ("DG Card Game", ["https://dgcardgame.com/boutique/"]),
-    "cardsgamecollect.fr": ("Cards Game Collect", ["https://cardsgamecollect.fr/"]),
-    "collect-avenue.com": ("Collect Avenue", ["https://collect-avenue.com/"]),
-    "goldenhit-tcg.com": ("Golden Hit", ["https://goldenhit-tcg.com/"]),
-    "lantredepo.com": ("L'Antre de Po", ["https://lantredepo.com/"]),
-    "poke-geek.fr": ("Poke-Geek", ["https://www.poke-geek.fr/"]),
-    "maisondubooster.com": ("Maison du Booster", ["https://maisondubooster.com/"]),
-    "tobiocards.com": ("Tobio Cards", ["https://tobiocards.com/"]),
-}
-
-INDEPENDENT_DOMAIN_BLOCKLIST = {
-    "amazon.fr", "amazon.com", "ebay.fr", "ebay.com", "cardmarket.com",
-    "leboncoin.fr", "rakuten.com", "rakuten.fr", "cdiscount.com",
-    "aliexpress.com", "temu.com", "facebook.com", "instagram.com",
-    "youtube.com", "reddit.com", "wikipedia.org", "google.com", "bing.com",
-}
 
 def _absolute_url(base_url: str, href: str):
     href = html_lib.unescape((href or "").strip())
@@ -1158,9 +1243,6 @@ def _catalog_links(html: str, base_url: str, domain: str):
         for term in POKEMON_PRODUCT_TERMS + ONEPIECE_PRODUCT_TERMS:
             if normalize_text(term) in hay:
                 score += 2
-        for term in DISCOVERY_WATCH_TERMS:
-            if normalize_text(term) in hay:
-                score += 4
         if any(x in hay for x in ("30e anniversaire", "30eme anniversaire", "30ème anniversaire", "30 ans", "portfolio", "classeur", "booster")):
             score += 3
         if score < 6:
@@ -1193,29 +1275,28 @@ def _catalog_page_links(html: str, base_url: str, domain: str):
     return links
 
 
-def _catalog_candidate_from_page(retailer, url, html, use_retailer_price=True, independent=False):
+def _catalog_candidate_from_page(retailer, url, html):
     title = _product_title(html, url)
-    if _is_explicitly_english_tcg(title, url, html):
+    if not (is_relevant_pokemon_candidate(title, url, html) or is_relevant_onepiece_candidate(title, url, html)):
         return None
-    if not (
-        is_relevant_pokemon_candidate(title, url, html)
-        or is_relevant_onepiece_candidate(title, url, html)
-    ):
+    if _marketplace_only(html, retailer):
+        if DISCOVERY_LOG_ALL_CANDIDATES:
+            print(f"    - rejet marketplace/vendeur tiers: {title[:100]}")
         return None
-    status, source = classify(html)
+    price = _reference_price_from_retailer(html, retailer)
+    if price is None:
+        return None
+    status, source = classify(html, retailer)
     score, reasons = _score_candidate(retailer, title, url, html)
     if score < 6:
         return None
-    price = _reference_price_from_retailer(html, retailer) if use_retailer_price else None
     return {
         "name": f"{retailer} - {title}", "url": url,
-        "reference_price": price, "reference_source": retailer if price is not None else "",
+        "reference_price": price, "reference_source": retailer,
         "price": price, "status": status, "source": source,
-        "independent_discovery": bool(independent),
-        "retailer": retailer,
-        "discovery_score": score,
-        "discovery_reasons": reasons + (["catalogue-independant"] if independent else ["catalogue-direct"]),
+        "discovery_score": score, "discovery_reasons": reasons + ["catalogue-direct"],
     }
+
 
 def discover_via_catalogs(products):
     if not CATALOG_DISCOVERY_ENABLED:
@@ -1278,118 +1359,9 @@ def discover_via_catalogs(products):
                 if key in global_seen:
                     continue
                 global_seen.add(key); discovered.append(item)
-                price_text = f"{item['reference_price']:.2f} €" if item.get("reference_price") is not None else "prix de référence à rechercher"
-                print(f"    ✅ CATALOGUE [{retailer}] {item['name'].split(' - ', 1)[-1][:100]} | {price_text}")
-    if INDEPENDENT_DISCOVERY_ENABLED:
-        independent = discover_via_independent_catalogs(list(products) + discovered)
-        discovered.extend(independent)
-        independent_search = discover_via_independent_search(list(products) + discovered)
-        discovered.extend(independent_search)
+                print(f"    ✅ CATALOGUE [{retailer}] {item['name'].split(' - ', 1)[-1][:100]} | {item['reference_price']:.2f} €")
     return discovered
 
-def _independent_domain_allowed(domain):
-    domain = domain.lower().split(":")[0].lstrip("www.")
-    if domain in DISCOVERY_RETAILERS or domain in INDEPENDENT_CATALOG_SEEDS:
-        return False
-    return domain not in INDEPENDENT_DOMAIN_BLOCKLIST and not any(domain.endswith("." + x) for x in INDEPENDENT_DOMAIN_BLOCKLIST)
-
-def _independent_search_queries():
-    return [
-        '"Pokémon TCG" (coffret OR booster OR display OR bundle OR "30ème anniversaire") ("version française" OR français) -anglais -english -japonais -japanese',
-        '"Pokémon" "Règne Delta" (booster OR display OR coffret OR pack) -anglais -english -japonais -japanese',
-        '"One Piece Card Game" ("TS-03" OR TS03 OR "Tin Pack") (français OR francaise) -anglais -english -japonais -japanese',
-        '"One Piece Card Game" ("OP-17" OR OP17 OR "OP-18" OR OP18) (booster OR display OR coffret) (français OR francaise) -anglais -english -japonais -japanese',
-    ]
-
-def discover_via_independent_catalogs(products):
-    if not INDEPENDENT_DISCOVERY_ENABLED:
-        return []
-    known = {p["url"].rstrip("/") for p in products}
-    discovered, global_seen = [], set(known)
-    for domain, (retailer, seeds) in INDEPENDENT_CATALOG_SEEDS.items():
-        print(f"  🏪 Catalogue indépendant : {retailer}")
-        pages, seen_pages = [], set()
-        for seed in seeds:
-            try:
-                html = _fetch_once(seed, DISCOVERY_TIMEOUT)
-                pages.append((seed, html)); seen_pages.add(seed.rstrip("/"))
-            except Exception as exc:
-                if DISCOVERY_LOG_ALL_CANDIDATES:
-                    print(f"    ! catalogue indépendant inaccessible {seed}: {exc}")
-        candidates = {}
-        for page_url, html in pages:
-            for score, anchor, url in _catalog_links(html, page_url, domain):
-                key = url.rstrip("/")
-                if key not in global_seen and key not in candidates:
-                    candidates[key] = (score, anchor, url)
-        selected = sorted(candidates.values(), key=lambda x: (-x[0], x[2]))[:INDEPENDENT_MAX_PRODUCTS_PER_HOST]
-        if not selected:
-            continue
-        def worker(item):
-            try:
-                html = _fetch_once(item[2], DISCOVERY_TIMEOUT)
-                return _catalog_candidate_from_page(retailer, item[2], html, use_retailer_price=False, independent=True)
-            except Exception as exc:
-                if DISCOVERY_LOG_ALL_CANDIDATES:
-                    print(f"    ! fiche indépendante inaccessible {item[2]}: {exc}")
-                return None
-        with ThreadPoolExecutor(max_workers=max(1, INDEPENDENT_FETCH_WORKERS)) as pool:
-            futures = [pool.submit(worker, item) for item in selected]
-            for future in as_completed(futures):
-                item = future.result()
-                if not item:
-                    continue
-                key = item["url"].rstrip("/")
-                if key in global_seen:
-                    continue
-                global_seen.add(key); discovered.append(item)
-                print(f"    🔎 INDÉPENDANT [{retailer}] {item['name'].split(' - ', 1)[-1][:100]} | en attente du prix grande enseigne")
-    return discovered
-
-def discover_via_independent_search(products):
-    if not INDEPENDENT_DISCOVERY_ENABLED or not SEARCH_DISCOVERY_ENABLED:
-        return []
-    known = {p["url"].rstrip("/") for p in products}
-    discovered, seen = [], set(known)
-    for query in _independent_search_queries()[:max(1, INDEPENDENT_SEARCH_QUERIES)]:
-        print(f"  🔎 Boutiques indépendantes : {query[:150]}")
-        urls = _search_engine_urls(query)[:max(1, INDEPENDENT_SEARCH_RESULTS)]
-        for url in urls:
-            clean = _clean_candidate_url(url)
-            if not clean or clean in seen:
-                continue
-            domain = urlparse(clean).netloc.lower().split(":")[0].lstrip("www.")
-            if not _independent_domain_allowed(domain):
-                continue
-            try:
-                html = _fetch_once(clean, DISCOVERY_TIMEOUT)
-            except Exception:
-                continue
-            title = _product_title(html, clean)
-            if _is_explicitly_english_tcg(title, clean, html):
-                continue
-            if not (is_relevant_pokemon_candidate(title, clean, html) or is_relevant_onepiece_candidate(title, clean, html)):
-                continue
-            score, reasons = _score_candidate(domain, title, clean, html)
-            if score < 7:
-                continue
-            status, source = classify(html)
-            item = {
-                "name": f"{domain} - {title}",
-                "url": clean,
-                "reference_price": None,
-                "reference_source": "",
-                "price": None,
-                "status": status,
-                "source": source,
-                "retailer": domain,
-                "independent_discovery": True,
-                "discovery_score": score,
-                "discovery_reasons": reasons + ["recherche-independant"],
-            }
-            seen.add(clean); discovered.append(item)
-            print(f"    🔎 INDÉPENDANT [{domain}] {title[:100]} | en attente du prix grande enseigne")
-    return discovered
 
 def _product_title(html: str, fallback_url: str) -> str:
     patterns = (
@@ -1450,6 +1422,8 @@ def _official_retailer_prices(html, retailer):
         return prices
     if structured_offers:
         return []
+    if _marketplace_only(html, retailer):
+        return []
     p = extract_price(html)
     return [p] if p is not None else []
 
@@ -1457,29 +1431,12 @@ def _reference_price_from_retailer(html, retailer):
     prices = _official_retailer_prices(html, retailer)
     return min(prices) if prices else None
 
-def _valid_ean13(value: str) -> bool:
-    value = re.sub(r"\D", "", str(value or ""))
-    if len(value) != 13:
-        return False
-    total = sum(int(value[i]) * (1 if i % 2 == 0 else 3) for i in range(12))
-    check = (10 - (total % 10)) % 10
-    return check == int(value[-1])
-
 def _extract_gtin_candidates(html):
     vals = []
-    # Priorité aux champs structurés explicites.
-    explicit = (
-        r'"gtin13"\s*:\s*"?(\d{13})',
-        r'"gtin"\s*:\s*"?(\d{13})',
-        r'"ean13"\s*:\s*"?(\d{13})',
-        r'"ean"\s*:\s*"?(\d{13})',
-        r'(?i)(?:EAN|GTIN)[^0-9]{0,30}(\d{13})',
-    )
-    for pat in explicit:
-        for m in re.finditer(pat, html):
-            value = m.group(1)
-            if _valid_ean13(value) and value not in vals:
-                vals.append(value)
+    for pat in (r'"(?:gtin13|gtin|ean)"\s*:\s*"?(\d{13})', r'\b(\d{13})\b'):
+        for m in re.finditer(pat, html, re.I):
+            if m.group(1) not in vals:
+                vals.append(m.group(1))
             if len(vals) >= 5:
                 return vals
     return vals
@@ -1549,17 +1506,16 @@ def _clean_candidate_url(url):
     return clean
 
 def _discovery_queries(domain):
-    # Recherche volontairement orientée FR. Aucun nom de set anglais n'est
-    # injecté dans les requêtes TCG. Les pages explicitement anglaises sont
-    # ensuite rejetées par _is_explicitly_english_tcg().
-    return [
-        f'site:{domain} (pokemon OR pokémon) ("30 ans" OR "30e anniversaire" OR "30ème anniversaire") (portfolio OR classeur OR binder OR album OR booster OR coffret OR ETB) (précommande OR acheter OR stock OR disponible) -anglais -english',
-        f'site:{domain} (pokemon OR pokémon) ("Règne Delta" OR ME06) (coffret OR ETB OR booster OR display OR pack OR blister OR deck) (précommande OR acheter OR stock OR disponible) -anglais -english',
-        f'site:{domain} (pokemon OR pokémon) (portfolio OR classeur OR binder OR album) (booster OR cartes OR "jeu de cartes") -anglais -english',
-        f'site:{domain} (pokemon OR pokémon) (ETB OR coffret OR booster OR display OR pack OR bundle OR collection OR tin OR blister OR deck) (précommande OR acheter OR stock OR disponible) -anglais -english',
-        f'site:{domain} ("One Piece Card Game" OR "One Piece TCG") ("TS-03" OR TS03 OR "Tin Pack" OR "boîte métal" OR "boite metal") (précommande OR acheter OR stock OR disponible OR français OR francaise) -anglais -english',
-        f'site:{domain} ("One Piece Card Game" OR "One Piece TCG") ("OP-17" OR OP17 OR "OP 17" OR "OP-18" OR OP18 OR "OP 18") (booster OR display OR pack OR coffret) (précommande OR acheter OR stock OR disponible) -anglais -english',
+    # V15 : requêtes spécialisées pour les classeurs/portfolios 30 ans.
+    pokemon_queries = [
+        f'site:{domain} (pokemon OR pokémon) ("30e Anniversaire" OR "30ème Anniversaire" OR "30eme Anniversaire" OR "30th Anniversary" OR "30th Celebration" OR "30 ans" OR "30ans") (portfolio OR classeur OR binder OR album OR collection OR booster)',
+        f'site:{domain} (pokemon OR pokémon) ("30e Anniversaire" OR "30ème Anniversaire" OR "30eme Anniversaire" OR "30th Anniversary") (ETB OR coffret OR booster OR display OR pack OR bundle OR collection OR tin OR blister OR deck)',
+        f'site:{domain} (pokemon OR pokémon) (portfolio OR classeur OR binder OR album) (booster OR pokemon OR pokémon)',
+        f'site:{domain} (pokemon OR pokémon) (ETB OR coffret OR booster OR display OR pack OR bundle OR collection OR tin OR blister OR deck) (précommande OR acheter OR stock OR disponible)',
+        f'site:{domain} "Pokémon" (booster OR display OR coffret OR ETB OR pack OR box)',
+        f'site:{domain} "One Piece" (booster OR display OR coffret OR pack OR box OR deck)',
     ]
+    return pokemon_queries
 
 def _score_candidate(retailer, title, url, html):
     hay = normalize_text(f"{title} {url}")
@@ -1591,85 +1547,45 @@ def _score_candidate(retailer, title, url, html):
 
     return score, list(dict.fromkeys(reasons))
 
-def _discovery_line_key(line):
-    parts = [x.strip() for x in line.split("|")]
-    if len(parts) < 3 or not parts[1].startswith(("http://", "https://")):
-        return None
-    return parts[1].rstrip("/")
-
-def _load_discovery_queue():
-    queue = {}
-    try:
-        text = DISCOVERY_FILE.read_text(encoding="utf-8-sig")
-    except FileNotFoundError:
-        return []
-    except OSError:
-        return []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = [x.strip() for x in line.split("|")]
-        if len(parts) < 3 or not parts[1].startswith(("http://", "https://")):
-            continue
-        name, url = parts[0], parts[1].rstrip("/")
-        price = parse_price(parts[2])
-        retailer = ""
-        for part in parts[3:]:
-            if part.lower().startswith("enseigne="):
-                retailer = part.split("=", 1)[1].strip()
-                break
-        known_major_retailers = {v[0] for v in DISCOVERY_RETAILERS.values()}
-        queue[url] = {
-            "name": name, "url": url, "reference_price": price,
-            "reference_source": retailer if retailer in known_major_retailers else "",
-            "retailer": retailer,
-            "independent_discovery": retailer not in known_major_retailers,
-        }
-    return list(queue.values())
-
-def _write_discovery_queue(items):
-    rows = [
-        "# Journal des produits découverts automatiquement",
-        "# Nom | URL | prix ou PRIX_INCONNU | découverte | enseigne",
-    ]
-    stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
-    for item in items:
-        price = item.get("reference_price")
-        price_text = f"{float(price):.2f}" if price is not None else "PRIX_INCONNU"
-        retailer = item.get("reference_source") or item.get("retailer") or "?"
-        discovered_at = item.get("discovered_at") or stamp
-        if isinstance(discovered_at, (int, float)):
-            discovered_at = datetime.fromtimestamp(discovered_at).astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
-        rows.append(f"{item.get('name','Produit découvert')} | {item['url'].rstrip('/')} | {price_text} | découverte={discovered_at} | enseigne={retailer}")
-    try:
-        DISCOVERY_FILE.write_text("\n".join(rows) + "\n", encoding="utf-8")
-    except OSError as exc:
-        print(f"! impossible d'écrire discovered_products.txt: {exc}")
-
 def _append_discovery_log(items):
     if not items:
         return 0
-    queue = _load_discovery_queue()
-    by_url = {x["url"].rstrip("/"): x for x in queue if x.get("url")}
-    added = 0
+    existing = set()
+    try:
+        text = DISCOVERY_FILE.read_text(encoding="utf-8-sig")
+        for line in text.splitlines():
+            m = LINE_RE.match(line.strip())
+            if m:
+                existing.add(m.group(2).rstrip("/"))
+    except FileNotFoundError:
+        text = ""
+    rows = []
+    stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
     for item in items:
-        url = (item.get("url") or "").rstrip("/")
-        if not url:
+        url = item["url"].rstrip("/")
+        if url in existing:
             continue
-        old = by_url.get(url)
-        if old is None:
-            item = dict(item)
-            item.setdefault("discovered_at", time.time())
-            by_url[url] = item
-            added += 1
+        rows.append(
+            f"{item['name']} | {url} | {item['reference_price']:.2f}"
+            f" | découverte={stamp} | enseigne={item.get('reference_source','?')}"
+        )
+        existing.add(url)
+    if not rows:
+        return 0
+    try:
+        header = (
+            "# Journal des produits découverts automatiquement\n"
+            "# Nom | URL | prix | découverte | enseigne\n"
+        )
+        if not text.strip():
+            DISCOVERY_FILE.write_text(header + "\n".join(rows) + "\n", encoding="utf-8")
         else:
-            # Mise à jour du prix/enseigne si la découverte devient plus complète.
-            for key in ("name", "reference_price", "reference_source", "retailer"):
-                if item.get(key) is not None:
-                    old[key] = item[key]
-    _write_discovery_queue(list(by_url.values()))
-    return added
+            with DISCOVERY_FILE.open("a", encoding="utf-8") as f:
+                f.write("\n".join(rows) + "\n")
+        return len(rows)
+    except OSError as exc:
+        print(f"! impossible d'écrire discovered_products.txt: {exc}")
+        return 0
 
 def _append_products_txt(items):
     if not items or not AUTO_ADD_DISCOVERED:
@@ -1684,87 +1600,28 @@ def _append_products_txt(items):
         if m:
             existing.add(m.group(2).rstrip("/"))
     additions = []
-    promoted_urls = set()
     for item in items:
-        url = (item.get("url") or "").rstrip("/")
+        url = item["url"].rstrip("/")
         price = item.get("reference_price")
         if not url or price is None or url in existing:
-            if url in existing:
-                promoted_urls.add(url)
             continue
-        try:
-            price = float(price)
-        except (TypeError, ValueError):
-            continue
-        if price <= 0:
-            continue
-        name = str(item.get("name") or "Produit découvert").replace("|", "-").strip()
-        additions.append(f"{name} | {url} | {price:.2f}")
+        additions.append(f'{item["name"]} | {url} | {price:.2f}')
         existing.add(url)
-        promoted_urls.add(url)
     if not additions:
         return 0
     sep = "\n" if current and not current.endswith("\n") else ""
     try:
         PRODUCTS_FILE.write_text(
-            current + sep + "\n# Produits découverts automatiquement — prix enseigne\n" +
-            "\n".join(additions) + "\n", encoding="utf-8"
+            current + sep +
+            "\n# Produits découverts automatiquement — prix enseigne\n" +
+            "\n".join(additions) + "\n",
+            encoding="utf-8"
         )
-        # Retire les produits désormais actifs de la file de découverte.
-        queue = [x for x in _load_discovery_queue() if x.get("url", "").rstrip("/") not in promoted_urls]
-        _write_discovery_queue(queue)
         print(f"+ {len(additions)} nouveau(x) produit(s) ajouté(s) automatiquement à products.txt")
         return len(additions)
     except OSError as exc:
         print(f"! impossible d'ajouter automatiquement à products.txt: {exc}")
         return 0
-
-def retry_discovered_prices():
-    """Retente les prix des découvertes conservées sans prix."""
-    queue = _load_discovery_queue()
-    pending = [x for x in queue if x.get("reference_price") is None]
-    if not pending:
-        return []
-    promoted = []
-    independent_attempts = 0
-    now = time.time()
-    for item in pending:
-        if item.get("independent_discovery") and independent_attempts >= max(1, INDEPENDENT_PRICE_RETRY_MAX):
-            continue
-        if item.get("independent_discovery"):
-            independent_attempts += 1
-        url = item.get("url", "").rstrip("/")
-        if not url:
-            continue
-        retailer = item.get("reference_source") or item.get("retailer") or ""
-        if not retailer:
-            host = urlparse(url).netloc.lower().lstrip("www.")
-            retailer = DISCOVERY_RETAILERS.get(host, ("", ()))[0]
-        try:
-            html = _fetch_once(url, DISCOVERY_TIMEOUT)
-            title = _product_title(html, url)
-            if _is_explicitly_english_tcg(title, url, html):
-                continue
-            if item.get("independent_discovery"):
-                found = _find_official_price_for_product(item.get("name", title), url, html)
-                price = found[0] if found else None
-                price_source = found[1] if found else ""
-            else:
-                price = _reference_price_from_retailer(html, retailer) if retailer else extract_price(html)
-                price_source = retailer
-        except Exception as exc:
-            if DISCOVERY_LOG_ALL_CANDIDATES:
-                print(f"    ! retry prix impossible {url}: {exc}")
-            continue
-        if price is not None:
-            item["reference_price"] = price
-            item["price"] = price
-            item["reference_source"] = price_source
-            promoted.append(item)
-    if promoted:
-        _append_discovery_log(promoted)
-        _append_products_txt(promoted)
-    return promoted
 
 def discover_via_search_engines(products):
     if not SEARCH_DISCOVERY_ENABLED:
@@ -1777,67 +1634,98 @@ def discover_via_search_engines(products):
     for domain, (retailer, families) in DISCOVERY_RETAILERS.items():
         if per_host[domain] >= DISCOVERY_MAX_PER_HOST:
             continue
-        queries = _discovery_queries(domain)[:max(1, SEARCH_QUERIES_PER_HOST)]
+
+        queries = _discovery_queries(domain)
+        # V15 : le nombre demandé est maintenant réellement respecté.
+        queries = queries[:max(1, SEARCH_QUERIES_PER_HOST)]
+
         for query in queries:
             if per_host[domain] >= DISCOVERY_MAX_PER_HOST:
                 break
+
             print(f"  🔎 {retailer}: {query[:150]}")
             for url in _search_engine_urls(query):
                 if per_host[domain] >= DISCOVERY_MAX_PER_HOST:
                     break
+
                 clean = _clean_candidate_url(url)
                 if not clean or clean in known:
                     continue
+
                 parsed = urlparse(clean)
                 host = parsed.netloc.lower().split(":")[0].lstrip("www.")
                 if host != domain:
                     continue
+
                 try:
                     html = _fetch_once(clean, DISCOVERY_TIMEOUT)
                 except Exception as exc:
                     if DISCOVERY_LOG_ALL_CANDIDATES:
                         print(f"    ! échec {clean}: {exc}")
                     continue
+
                 title = _product_title(html, clean)
-                if _is_explicitly_english_tcg(title, clean, html):
-                    if DISCOVERY_LOG_ALL_CANDIDATES:
-                        print(f"    - rejet anglais: {title[:100]}")
-                    continue
                 pokemon_ok = is_relevant_pokemon_candidate(title, clean, html)
                 onepiece_ok = is_relevant_onepiece_candidate(title, clean, html)
+
                 if not (pokemon_ok or onepiece_ok):
                     if DISCOVERY_LOG_ALL_CANDIDATES:
                         print(f"    - rejet: {title[:100]}")
                     continue
-                status, source = classify(html)
+
+                if _marketplace_only(html, retailer):
+                    if DISCOVERY_LOG_ALL_CANDIDATES:
+                        print(f"    - rejet marketplace/vendeur tiers: {title[:100]}")
+                    continue
+
+                reference_price = _reference_price_from_retailer(html, retailer)
+                if reference_price is None:
+                    if DISCOVERY_LOG_ALL_CANDIDATES:
+                        print(f"    - candidat sans prix exploitable: {title[:100]}")
+                    continue
+
+                status, source = classify(html, retailer)
                 score, reasons = _score_candidate(retailer, title, clean, html)
+
+                # Protection contre les pages catégorie qui contiennent beaucoup
+                # de mots Pokémon mais ne sont pas des fiches produit.
                 if score < 6:
                     continue
-                reference_price = _reference_price_from_retailer(html, retailer)
+
                 item = {
-                    "name": f"{retailer} - {title}", "url": clean,
+                    "name": f"{retailer} - {title}",
+                    "url": clean,
                     "reference_price": reference_price,
-                    "reference_source": retailer, "retailer": retailer,
-                    "price": reference_price, "status": status, "source": source,
-                    "discovery_score": score, "discovery_reasons": reasons,
-                    "discovered_at": time.time(),
+                    "reference_source": retailer,
+                    "price": reference_price,
+                    "status": status,
+                    "source": source,
+                    "discovery_score": score,
+                    "discovery_reasons": reasons,
                 }
                 discovered.append(item)
                 known.add(clean)
                 per_host[domain] += 1
-                price_text = f"{reference_price:.2f} €" if reference_price is not None else "prix en attente"
-                print(f"    ✅ DÉCOUVERTE [{retailer}] {title[:120]} | {price_text} | score={score}")
+
+                print(
+                    f"    ✅ DÉCOUVERTE [{retailer}] {title[:120]} | "
+                    f"{reference_price:.2f} € | score={score} | {', '.join(reasons[:6])}"
+                )
 
     if not discovered:
         print("  ℹ️ aucune nouvelle fiche produit découverte.")
         return []
+
+    # Journal séparé : contrairement à V14, il est réellement écrit.
     logged = _append_discovery_log(discovered)
     print(f"  📝 {logged} découverte(s) journalisée(s) dans discovered_products.txt")
+
     added = _append_products_txt(discovered)
     if not AUTO_ADD_DISCOVERED:
         print("  ℹ️ AUTO_ADD_DISCOVERED=0 : produits détectés mais non ajoutés à products.txt")
     elif not added:
-        print("  ℹ️ aucune nouvelle URL à ajouter à products.txt (prix potentiellement en attente)")
+        print("  ℹ️ aucune nouvelle URL à ajouter à products.txt")
+
     return discovered
 
 def activate_new_discoveries(state, products, discovered):
@@ -1863,22 +1751,11 @@ def activate_new_discoveries(state, products, discovered):
     return products
 
 def discover_new_products(products, run_catalog=True):
-    """Découverte hybride V15 : file persistante + catalogue direct + Google/Bing."""
+    """Découverte hybride V16 : catalogue direct + Google/Bing."""
     discovered = []
-    promoted = retry_discovered_prices()
-    discovered.extend(promoted)
-    # Recharger après promotion éventuelle.
-    try:
-        products[:] = load_products()
-    except Exception:
-        pass
     if run_catalog:
         discovered.extend(discover_via_catalogs(products))
     discovered.extend(discover_via_search_engines(list(products) + discovered))
-    # Journal + ajout après catalogue direct également.
-    if discovered:
-        _append_discovery_log(discovered)
-        _append_products_txt(discovered)
     unique, seen = [], set()
     for item in discovered:
         key = item.get("url", "").rstrip("/")
@@ -1908,10 +1785,7 @@ def _find_official_price_for_product(name, source_url, source_html):
                     html = _fetch_once(clean, DISCOVERY_TIMEOUT)
                 except Exception:
                     continue
-                title_raw = _product_title(html, clean)
-                if _is_explicitly_english_tcg(title_raw, clean, html):
-                    continue
-                title = title_raw.lower()
+                title = _product_title(html, clean).lower()
                 src_title = _product_title(source_html, source_url).lower()
                 tokens = [t for t in re.findall(r"[a-z0-9éèêàùûôîïç]+", src_title) if len(t) >= 4]
                 overlap = sum(1 for t in set(tokens) if t in title)
@@ -1943,7 +1817,7 @@ def refresh_existing_reference_prices(products):
             rows.append(raw)
             continue
         hay = normalize_text(name + " " + url)
-        if not any(x in hay for x in ("pokemon", "pokémon", "one piece", "onepiece", "op-17", "op-18", "op-19", "ts-03", "ts03", "eb-")):
+        if not any(x in hay for x in ("pokemon", "pokémon", "one piece", "onepiece", "op-17", "op-18", "eb-")):
             rows.append(raw)
             continue
         try:
@@ -2080,8 +1954,8 @@ def main():
         print("Mode rapide terminé.")
         return
 
-    print(f"Bot V15 lancé — filtre prix +{PRICE_TOLERANCE_PCT:g}% | {len(products)} produits.")
-    print("Découverte: catalogues directs + Google/Bing | TCG FR uniquement | TS-03/OP-17/OP-18 activés.")
+    print(f"Bot V17 lancé — filtre prix +{PRICE_TOLERANCE_PCT:g}% | {len(products)} produits.")
+    print("Découverte: catalogues directs + Google/Bing | TCG strict | vendeurs tiers exclus.")
     print("Ctrl+C pour arrêter.")
 
     try:
