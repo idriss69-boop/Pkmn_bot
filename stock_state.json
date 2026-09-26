@@ -451,7 +451,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790455871.7013106,
       "status": "out",
       "url": "https://www.carrefour.fr/p/cartes-a-jouer-et-a-collectionner-coffret-dresseur-d-elite-30e-anniversaire-pokemon-0196214144835",
       "weak_hits": 0
@@ -476,7 +476,7 @@
     },
     "https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790456171.7013128,
       "errors": 0,
       "last_http_status": 200,
       "last_price": 27.99,
@@ -487,7 +487,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790455871.7013128,
       "status": "out",
       "url": "https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102",
       "weak_hits": 0
@@ -958,6 +958,24 @@
       "problem_since": 1790166108.4294417,
       "status": null,
       "url": "https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034966-cartes-one-piece-double-booster-op17-les-guerriers-les-plus-puissants-au-monde.html",
+      "weak_hits": 0
+    },
+    "https://www.king-jouet.com/jeux-jouets/marque-asmodee/Pokemon/page1.htm": {
+      "alerted": false,
+      "cooldown_until": 1790456171.7012753,
+      "errors": 0,
+      "last_http_status": null,
+      "last_price": null,
+      "name": "King Jouet - Pokemon Asmodée - King Jouet France",
+      "next_check": 1790456171.7012753,
+      "physical_checked_at": 0,
+      "physical_last_alert": 0,
+      "physical_status": null,
+      "physical_stores": [],
+      "problem_alerted": false,
+      "problem_since": 1790454759.2904582,
+      "status": null,
+      "url": "https://www.king-jouet.com/jeux-jouets/marque-asmodee/Pokemon/page1.htm",
       "weak_hits": 0
     },
     "https://www.king-jouet.com/jeux-jouets/nouveautes/marque-asmodee/Pokemon/page1.htm": {
