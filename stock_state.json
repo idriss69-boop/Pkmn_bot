@@ -458,7 +458,7 @@
     },
     "https://www.carrefour.fr/p/coffret-pokemon-amphinobi-ex-30e-anniversaire-pokemon-0196214147164": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790499591.6987164,
       "errors": 0,
       "last_http_status": 200,
       "last_price": 27.99,
@@ -469,7 +469,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790499291.6987164,
       "status": "out",
       "url": "https://www.carrefour.fr/p/coffret-pokemon-amphinobi-ex-30e-anniversaire-pokemon-0196214147164",
       "weak_hits": 0
@@ -494,7 +494,7 @@
     },
     "https://www.carrefour.fr/p/coffret-pokemon-poster-30e-anniversaire-pokemon-0196214146006": {
       "alerted": false,
-      "cooldown_until": 1790498657.100037,
+      "cooldown_until": 1790499591.6987398,
       "errors": 8,
       "last_http_status": null,
       "last_price": null,
@@ -512,7 +512,7 @@
     },
     "https://www.carrefour.fr/p/double-pack-one-piece-op17-les-guerriers-les-plus-puissants-au-monde-4582770058741": {
       "alerted": false,
-      "cooldown_until": 1790498657.1000419,
+      "cooldown_until": 1790499591.6987436,
       "errors": 8,
       "last_http_status": null,
       "last_price": null,
