@@ -1,5 +1,5 @@
 {
-  "last_catalog_discovery": 1790528639.379461,
+  "last_catalog_discovery": 1790529404.8619246,
   "last_config_alert": 0,
   "last_crash_alert": 0,
   "last_discovery": 1790530118.746809,
@@ -703,7 +703,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790352834.2099917,
+      "problem_since": 0,
       "status": "out",
       "url": "https://www.fnac.com/Cartes-a-collectionner-Pokemon-30A-Coffret-Nymphali-ex/a23200275/w-4?oref=00000000-0000-0000-0000-000000000000#omnsearchpos=6",
       "weak_hits": 0
@@ -721,8 +721,8 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790457321.2697375,
-      "status": "in",
+      "problem_since": 0,
+      "status": "out",
       "url": "https://www.fnac.com/Cartes-a-collectionner-Pokemon-30A-Coffret-Poster/a23200285/w-4#omnsearchpos=1",
       "weak_hits": 0
     },
@@ -973,7 +973,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790528806.1490479,
+      "problem_since": 1790529629.922731,
       "status": "unknown",
       "url": "https://www.king-jouet.com/jeux-jouets/accessoires-cartes-pokemon/page1.htm",
       "weak_hits": 0
