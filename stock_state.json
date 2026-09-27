@@ -1,5 +1,5 @@
 {
-  "last_catalog_discovery": 1790522741.0670574,
+  "last_catalog_discovery": 1790523556.3498075,
   "last_config_alert": 0,
   "last_crash_alert": 0,
   "last_discovery": 1790524419.23797,
@@ -958,6 +958,24 @@
       "problem_since": 1790166108.4294417,
       "status": null,
       "url": "https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034966-cartes-one-piece-double-booster-op17-les-guerriers-les-plus-puissants-au-monde.html",
+      "weak_hits": 0
+    },
+    "https://www.king-jouet.com/jeux-jouets/accessoires-cartes-pokemon/page1.htm": {
+      "alerted": false,
+      "cooldown_until": 1790524025.9681096,
+      "errors": 0,
+      "last_http_status": null,
+      "last_price": null,
+      "name": "King Jouet - Les accessoires des cartes Pokémon",
+      "next_check": 1790524025.9681096,
+      "physical_checked_at": 0,
+      "physical_last_alert": 0,
+      "physical_status": null,
+      "physical_stores": [],
+      "problem_alerted": false,
+      "problem_since": 1790523725.9681096,
+      "status": null,
+      "url": "https://www.king-jouet.com/jeux-jouets/accessoires-cartes-pokemon/page1.htm",
       "weak_hits": 0
     },
     "https://www.king-jouet.com/jeux-jouets/marque-asmodee/Pokemon/page1.htm": {
