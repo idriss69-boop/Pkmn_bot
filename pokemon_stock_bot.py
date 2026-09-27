@@ -97,11 +97,11 @@ DISCOVERY_MAX_PER_HOST = int(os.environ.get("DISCOVERY_MAX_PER_HOST", "12"))
 DISCOVERY_TIMEOUT = int(os.environ.get("DISCOVERY_TIMEOUT", "12"))
 DISCOVERY_EVERY = int(os.environ.get("DISCOVERY_EVERY", "180"))
 
-# V17 : découverte directe + filtrage TCG strict + protection marketplace des catalogues/pages TCG des enseignes.
+# V18 : découverte catalogue multi-pages + filtrage TCG strict + protection marketplace.
 CATALOG_DISCOVERY_ENABLED = os.environ.get("CATALOG_DISCOVERY_ENABLED", "1") != "0"
 CATALOG_DISCOVERY_EVERY = int(os.environ.get("CATALOG_DISCOVERY_EVERY", "1800"))
-CATALOG_MAX_PAGES_PER_HOST = int(os.environ.get("CATALOG_MAX_PAGES_PER_HOST", "2"))
-CATALOG_MAX_PRODUCTS_PER_HOST = int(os.environ.get("CATALOG_MAX_PRODUCTS_PER_HOST", "12"))
+CATALOG_MAX_PAGES_PER_HOST = int(os.environ.get("CATALOG_MAX_PAGES_PER_HOST", "6"))
+CATALOG_MAX_PRODUCTS_PER_HOST = int(os.environ.get("CATALOG_MAX_PRODUCTS_PER_HOST", "24"))
 CATALOG_FETCH_WORKERS = int(os.environ.get("CATALOG_FETCH_WORKERS", "6"))
 
 SEARCH_DISCOVERY_ENABLED = os.environ.get("SEARCH_DISCOVERY_ENABLED", "1") != "0"
@@ -1254,6 +1254,7 @@ def _catalog_links(html: str, base_url: str, domain: str):
 
 
 def _catalog_page_links(html: str, base_url: str, domain: str):
+    """Retourne les pages de pagination d'un catalogue sans dépendre d'un seul format d'URL."""
     links, seen = [], set()
     host = domain.lower().lstrip("www.")
     rx = re.compile(r'<a\b[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
@@ -1264,9 +1265,16 @@ def _catalog_page_links(html: str, base_url: str, domain: str):
         p = urlparse(url)
         if p.netloc.lower().split(":")[0].lstrip("www.") != host:
             continue
+        attrs = m.group(0)
         label = normalize_text(re.sub(r"<[^>]+>", " ", m.group(2)))
-        hay = f"{label} {p.path} {p.query}".lower()
-        if not any(x in hay for x in ("page=", "page/", "p=", "start=", "offset=", "suivant", "next")):
+        hay = normalize_text(f"{label} {attrs} {p.path} {p.query}")
+        is_pagination = (
+            any(x in hay for x in ("suivant", "precedent", "next", "previous", "pagination", "page suivante"))
+            or bool(re.search(r"(?:[?&](?:page|p|start|offset)=|/page[/_-]?\d+|/p[/_-]?\d+)", hay, re.I))
+            or bool(re.search(r"\b(?:page|p)\s*\d+\b", hay, re.I))
+            or bool(re.search(r"aria-label=[^>]*(?:page|next|suivant)", attrs, re.I))
+        )
+        if not is_pagination:
             continue
         key = url.rstrip("/")
         if key not in seen:
@@ -1308,29 +1316,41 @@ def discover_via_catalogs(products):
         print(f"  📚 Catalogue direct: {retailer}")
         pages = []
         seen_pages = set()
+        # On charge toutes les seeds disponibles avant de parcourir la pagination.
+        # Ainsi, deux catégories officielles ne se bloquent plus mutuellement à cause
+        # d'un plafond global de pages.
         for seed in seeds:
             if len(pages) >= CATALOG_MAX_PAGES_PER_HOST:
                 break
+            key = seed.rstrip("/")
+            if key in seen_pages:
+                continue
             try:
                 html = _fetch_once(seed, DISCOVERY_TIMEOUT)
-                pages.append((seed, html)); seen_pages.add(seed.rstrip("/"))
+                pages.append((seed, html)); seen_pages.add(key)
             except Exception as exc:
                 if DISCOVERY_LOG_ALL_CANDIDATES:
                     print(f"    ! catalogue inaccessible {seed}: {exc}")
-        # Une page suivante éventuelle, sans crawler toute la pagination.
-        if len(pages) < CATALOG_MAX_PAGES_PER_HOST:
-            for seed, html in list(pages):
-                for nxt in _catalog_page_links(html, seed, domain):
-                    if len(pages) >= CATALOG_MAX_PAGES_PER_HOST:
-                        break
-                    key = nxt.rstrip("/")
-                    if key in seen_pages:
-                        continue
-                    try:
-                        nxt_html = _fetch_once(nxt, DISCOVERY_TIMEOUT)
-                        pages.append((nxt, nxt_html)); seen_pages.add(key)
-                    except Exception:
-                        continue
+
+        # Parcours limité mais progressif de la pagination. On collecte d'abord
+        # les liens trouvés sur les pages déjà chargées, puis on continue jusqu'au
+        # plafond. Cela évite de dépendre des seules 1re/2e pages.
+        cursor = 0
+        while cursor < len(pages) and len(pages) < CATALOG_MAX_PAGES_PER_HOST:
+            page_url, html = pages[cursor]
+            cursor += 1
+            for nxt in _catalog_page_links(html, page_url, domain):
+                if len(pages) >= CATALOG_MAX_PAGES_PER_HOST:
+                    break
+                key = nxt.rstrip("/")
+                if key in seen_pages:
+                    continue
+                try:
+                    nxt_html = _fetch_once(nxt, DISCOVERY_TIMEOUT)
+                    pages.append((nxt, nxt_html)); seen_pages.add(key)
+                except Exception as exc:
+                    if DISCOVERY_LOG_ALL_CANDIDATES:
+                        print(f"    ! page catalogue inaccessible {nxt}: {exc}")
         candidates = {}
         for page_url, html in pages:
             for score, anchor, url in _catalog_links(html, page_url, domain):
@@ -1716,16 +1736,8 @@ def discover_via_search_engines(products):
         print("  ℹ️ aucune nouvelle fiche produit découverte.")
         return []
 
-    # Journal séparé : contrairement à V14, il est réellement écrit.
-    logged = _append_discovery_log(discovered)
-    print(f"  📝 {logged} découverte(s) journalisée(s) dans discovered_products.txt")
-
-    added = _append_products_txt(discovered)
-    if not AUTO_ADD_DISCOVERED:
-        print("  ℹ️ AUTO_ADD_DISCOVERED=0 : produits détectés mais non ajoutés à products.txt")
-    elif not added:
-        print("  ℹ️ aucune nouvelle URL à ajouter à products.txt")
-
+    # La persistance est faite par discover_new_products(), quelle que soit
+    # l'origine de la découverte (catalogue direct ou Google/Bing).
     return discovered
 
 def activate_new_discoveries(state, products, discovered):
@@ -1751,7 +1763,7 @@ def activate_new_discoveries(state, products, discovered):
     return products
 
 def discover_new_products(products, run_catalog=True):
-    """Découverte hybride V16 : catalogue direct + Google/Bing."""
+    """Découverte hybride V18 : catalogue direct multi-pages + Google/Bing."""
     discovered = []
     if run_catalog:
         discovered.extend(discover_via_catalogs(products))
@@ -1761,6 +1773,18 @@ def discover_new_products(products, run_catalog=True):
         key = item.get("url", "").rstrip("/")
         if key and key not in seen:
             seen.add(key); unique.append(item)
+
+    # Une seule sortie de persistance pour toutes les sources. Une fiche trouvée
+    # par le catalogue est donc traitée exactement comme une fiche trouvée par
+    # Google/Bing et ne dépend plus de SEARCH_DISCOVERY_ENABLED.
+    if unique:
+        logged = _append_discovery_log(unique)
+        print(f"  📝 {logged} découverte(s) journalisée(s) dans discovered_products.txt")
+        added = _append_products_txt(unique)
+        if not AUTO_ADD_DISCOVERED:
+            print("  ℹ️ AUTO_ADD_DISCOVERED=0 : produits détectés mais non ajoutés à products.txt")
+        elif not added:
+            print("  ℹ️ aucune nouvelle URL à ajouter à products.txt")
     return unique
 
 # ---------------------------------------------------------------------------
