@@ -1,5 +1,5 @@
 {
-  "last_catalog_discovery": 1790508713.4083095,
+  "last_catalog_discovery": 1790509435.2896216,
   "last_config_alert": 0,
   "last_crash_alert": 0,
   "last_discovery": 1790510131.486818,
@@ -512,7 +512,7 @@
     },
     "https://www.carrefour.fr/p/double-pack-one-piece-op17-les-guerriers-les-plus-puissants-au-monde-4582770058741": {
       "alerted": false,
-      "cooldown_until": 1790509109.6436522,
+      "cooldown_until": 1790509905.406748,
       "errors": 8,
       "last_http_status": null,
       "last_price": null,
