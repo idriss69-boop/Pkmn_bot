@@ -132,3 +132,6 @@ La Grande Récré - Valise cabine Pokemon - Pikachu Neon | https://www.lagrander
 
 # Produits découverts automatiquement — prix enseigne
 King Jouet - Les accessoires des cartes Pokémon | https://www.king-jouet.com/jeux-jouets/accessoires-cartes-pokemon/page1.htm | 13.00
+
+# Produits découverts automatiquement — prix enseigne
+King Jouet - Pokémon | Cartes à collectionner, Jeux et Jouets | King Jouet | https://www.king-jouet.com/jeux-jouets/Pokemon/page1.htm | 545.00
