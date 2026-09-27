@@ -1,5 +1,5 @@
 {
-  "last_catalog_discovery": 1790475008.5568202,
+  "last_catalog_discovery": 1790475661.246574,
   "last_config_alert": 0,
   "last_crash_alert": 0,
   "last_discovery": 1790476568.100858,
@@ -451,7 +451,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790471293.108003,
+      "problem_since": 0,
       "status": "out",
       "url": "https://www.carrefour.fr/p/cartes-a-jouer-et-a-collectionner-coffret-dresseur-d-elite-30e-anniversaire-pokemon-0196214144835",
       "weak_hits": 0
@@ -667,7 +667,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790447661.2208815,
+      "problem_since": 0,
       "status": "out",
       "url": "https://www.fnac.com/Cartes-a-collectionner-Pokemon-30A-Coffret-Amphinobi-ex/a23200310/w-4?oref=00000000-0000-0000-0000-000000000000",
       "weak_hits": 0
