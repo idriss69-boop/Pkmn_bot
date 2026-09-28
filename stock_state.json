@@ -81,7 +81,7 @@
     "https://lesgentlemendujeu.com/one-piece-op17-les-guerriers-les-plus-puissants-au-monde/12533-one-piece-duo-pack-op17.html": {
       "alerted": false,
       "cooldown_until": 0,
-      "errors": 0,
+      "errors": 1,
       "last_http_status": 200,
       "last_price": 299.9,
       "name": "Les Gentlemen du Jeu - OP-17 Duo Pack",
@@ -91,7 +91,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790625531.3735886,
       "status": "out",
       "url": "https://lesgentlemendujeu.com/one-piece-op17-les-guerriers-les-plus-puissants-au-monde/12533-one-piece-duo-pack-op17.html",
       "weak_hits": 0
