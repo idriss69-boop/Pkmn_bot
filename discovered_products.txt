@@ -75,3 +75,6 @@ Tobio Cards - Produits scellés One Piece JAP, Boosters, Promos | Tobio Cards | 
 Tobio Cards - Produits Scellés One Piece FR et JAP, Boosters, Promos Scellées | Tobio Cards | https://tobiocards.com/collections/produits-scelles-one-piece | PRIX_INCONNU | découverte=2026-09-26 21:55:50 +0000 | enseigne=Tobio Cards
 King Jouet - Les accessoires des cartes Pokémon | https://www.king-jouet.com/jeux-jouets/accessoires-cartes-pokemon/page1.htm | 13.00 | découverte=2026-09-27 15:41:09 +0000 | enseigne=King Jouet
 King Jouet - Pokémon | Cartes à collectionner, Jeux et Jouets | King Jouet | https://www.king-jouet.com/jeux-jouets/Pokemon/page1.htm | 545.00 | découverte=2026-09-27 21:05:57 +0000 | enseigne=King Jouet
+Fnac - Cartes à collectionner Pokémon EB10 Booster Display Modèle aléatoire | https://www.fnac.com/EB-10-ASTRES-RADIEUX-BOOSTER/a16881344/w-4 | 6.60 | découverte=2026-09-28 15:46:18 +0000 | enseigne=Fnac
+Fnac - Pokébox Pokémon - Jeux de récré, cartes à collectionner | fnac | https://www.fnac.com/n554020/Jeux-de-recre-cartes-a-collectionner/Pokebox-Pokemon | 4.00 | découverte=2026-09-28 15:46:18 +0000 | enseigne=Fnac
+Fnac - Nouveautés carte Pokémon - Jeux de récré, cartes à collectionner | fnac | https://www.fnac.com/l529208/Nouveautes-carte-Pokemon/Jeux-de-recre-cartes-a-collectionner | 4.00 | découverte=2026-09-28 15:46:18 +0000 | enseigne=Fnac

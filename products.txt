@@ -135,3 +135,8 @@ King Jouet - Les accessoires des cartes Pokémon | https://www.king-jouet.com/je
 
 # Produits découverts automatiquement — prix enseigne
 King Jouet - Pokémon | Cartes à collectionner, Jeux et Jouets | King Jouet | https://www.king-jouet.com/jeux-jouets/Pokemon/page1.htm | 545.00
+
+# Produits découverts automatiquement — prix enseigne
+Fnac - Cartes à collectionner Pokémon EB10 Booster Display Modèle aléatoire | https://www.fnac.com/EB-10-ASTRES-RADIEUX-BOOSTER/a16881344/w-4 | 6.60
+Fnac - Pokébox Pokémon - Jeux de récré, cartes à collectionner | fnac | https://www.fnac.com/n554020/Jeux-de-recre-cartes-a-collectionner/Pokebox-Pokemon | 4.00
+Fnac - Nouveautés carte Pokémon - Jeux de récré, cartes à collectionner | fnac | https://www.fnac.com/l529208/Nouveautes-carte-Pokemon/Jeux-de-recre-cartes-a-collectionner | 4.00
