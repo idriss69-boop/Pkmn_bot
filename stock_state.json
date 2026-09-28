@@ -1,5 +1,5 @@
 {
-  "last_catalog_discovery": 1790561343.2118983,
+  "last_catalog_discovery": 1790562044.0985997,
   "last_config_alert": 0,
   "last_crash_alert": 0,
   "last_discovery": 1790562904.9411988,
@@ -80,7 +80,7 @@
     },
     "https://lesgentlemendujeu.com/one-piece-op17-les-guerriers-les-plus-puissants-au-monde/12533-one-piece-duo-pack-op17.html": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790562508.8621476,
       "errors": 0,
       "last_http_status": 200,
       "last_price": 299.9,
@@ -91,14 +91,14 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790562208.8621476,
       "status": "out",
       "url": "https://lesgentlemendujeu.com/one-piece-op17-les-guerriers-les-plus-puissants-au-monde/12533-one-piece-duo-pack-op17.html",
       "weak_hits": 0
     },
     "https://lesgentlemendujeu.com/pokemon-30-ans-30eme-anniversaire/12617-pokemon-30-ans-coffret-dresseur-d-elite-etb-30eme-anniversaire-0196214144835.html": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790562508.8621323,
       "errors": 0,
       "last_http_status": 200,
       "last_price": 144.9,
@@ -109,7 +109,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790562208.8621323,
       "status": "out",
       "url": "https://lesgentlemendujeu.com/pokemon-30-ans-30eme-anniversaire/12617-pokemon-30-ans-coffret-dresseur-d-elite-etb-30eme-anniversaire-0196214144835.html",
       "weak_hits": 0
