@@ -1,5 +1,5 @@
 {
-  "last_catalog_discovery": 1790614828.2863343,
+  "last_catalog_discovery": 1790615624.5358057,
   "last_config_alert": 0,
   "last_crash_alert": 0,
   "last_discovery": 1790616398.74704,
@@ -1027,7 +1027,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790607238.980607,
+      "problem_since": 0,
       "status": "unknown",
       "url": "https://www.king-jouet.com/jeux-jouets/Pokemon/page1.htm",
       "weak_hits": 0
