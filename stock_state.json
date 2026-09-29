@@ -1,5 +1,5 @@
 {
-  "last_catalog_discovery": 1790710485.7681408,
+  "last_catalog_discovery": 1790711327.4016266,
   "last_config_alert": 0,
   "last_crash_alert": 0,
   "last_discovery": 1790712069.8062294,
@@ -487,7 +487,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790706665.2282639,
+      "problem_since": 0,
       "status": "out",
       "url": "https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102",
       "weak_hits": 0
@@ -739,7 +739,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790710611.2802873,
+      "problem_since": 1790711449.9548843,
       "status": "out",
       "url": "https://www.fnac.com/EB-10-ASTRES-RADIEUX-BOOSTER/a16881344/w-4",
       "weak_hits": 0
@@ -1027,7 +1027,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790710611.280427,
+      "problem_since": 1790711449.9548657,
       "status": "unknown",
       "url": "https://www.king-jouet.com/jeux-jouets/Pokemon/page1.htm",
       "weak_hits": 0
