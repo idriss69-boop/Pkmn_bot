@@ -1070,7 +1070,7 @@
     },
     "https://www.king-jouet.com/jeux-jouets/nouveautes/marque-asmodee/Pokemon/page1.htm": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790698221.3004992,
       "errors": 0,
       "last_http_status": 200,
       "last_price": 50.0,
@@ -1081,7 +1081,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790697921.3004992,
       "status": "unknown",
       "url": "https://www.king-jouet.com/jeux-jouets/nouveautes/marque-asmodee/Pokemon/page1.htm",
       "weak_hits": 0
