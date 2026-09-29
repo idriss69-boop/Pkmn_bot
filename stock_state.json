@@ -1,5 +1,5 @@
 {
-  "last_catalog_discovery": 1790715426.4368105,
+  "last_catalog_discovery": 1790716079.126198,
   "last_config_alert": 0,
   "last_crash_alert": 0,
   "last_discovery": 1790716732.5158553,
@@ -476,7 +476,7 @@
     },
     "https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790716490.2491515,
       "errors": 0,
       "last_http_status": 200,
       "last_price": 27.99,
@@ -494,7 +494,7 @@
     },
     "https://www.carrefour.fr/p/coffret-pokemon-poster-30e-anniversaire-pokemon-0196214146006": {
       "alerted": false,
-      "cooldown_until": 1790715834.689928,
+      "cooldown_until": 1790716490.2491536,
       "errors": 8,
       "last_http_status": null,
       "last_price": null,
@@ -944,7 +944,7 @@
     },
     "https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034913-pokemon-30-ans-coffret-amphinobi-ex.htm": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790716490.2491086,
       "errors": 0,
       "last_http_status": 200,
       "last_price": null,
@@ -955,7 +955,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790716190.2491086,
       "status": "out",
       "url": "https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034913-pokemon-30-ans-coffret-amphinobi-ex.htm",
       "weak_hits": 0
