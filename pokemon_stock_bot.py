@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bot de surveillance Pokémon / One Piece TCG — V16
+Bot de surveillance Pokémon / One Piece TCG — V17
 - Surveillance stock/prix
 - Découverte multi-enseignes via Google/Bing
 - Détection renforcée des portfolios/classeurs/binders
@@ -8,6 +8,8 @@ Bot de surveillance Pokémon / One Piece TCG — V16
 - Auto-ajout dans products.txt
 - Scan stock magasin Lyon
 - Gestion ntfy, prix, cooldowns et état persistant
+
+V17 : fiabilise les drops courts (notamment King Jouet), renforce la découverte ciblée et sépare strictement la détection TCG du contenu générique de page.
 
 V16 : ajoute une découverte directe des catalogues et corrige notamment les cas où une fiche comme
 "Smyths Toys - Pokémon - Portfolio avec Boosters - Modèle Aléatoire"
@@ -97,11 +99,11 @@ DISCOVERY_MAX_PER_HOST = int(os.environ.get("DISCOVERY_MAX_PER_HOST", "12"))
 DISCOVERY_TIMEOUT = int(os.environ.get("DISCOVERY_TIMEOUT", "12"))
 DISCOVERY_EVERY = int(os.environ.get("DISCOVERY_EVERY", "180"))
 
-# V18 : découverte catalogue multi-pages + filtrage TCG strict + protection marketplace.
+# V16 : découverte directe des catalogues/pages TCG des enseignes.
 CATALOG_DISCOVERY_ENABLED = os.environ.get("CATALOG_DISCOVERY_ENABLED", "1") != "0"
 CATALOG_DISCOVERY_EVERY = int(os.environ.get("CATALOG_DISCOVERY_EVERY", "1800"))
-CATALOG_MAX_PAGES_PER_HOST = int(os.environ.get("CATALOG_MAX_PAGES_PER_HOST", "6"))
-CATALOG_MAX_PRODUCTS_PER_HOST = int(os.environ.get("CATALOG_MAX_PRODUCTS_PER_HOST", "24"))
+CATALOG_MAX_PAGES_PER_HOST = int(os.environ.get("CATALOG_MAX_PAGES_PER_HOST", "2"))
+CATALOG_MAX_PRODUCTS_PER_HOST = int(os.environ.get("CATALOG_MAX_PRODUCTS_PER_HOST", "12"))
 CATALOG_FETCH_WORKERS = int(os.environ.get("CATALOG_FETCH_WORKERS", "6"))
 
 SEARCH_DISCOVERY_ENABLED = os.environ.get("SEARCH_DISCOVERY_ENABLED", "1") != "0"
@@ -109,6 +111,22 @@ SEARCH_ENGINE = os.environ.get("SEARCH_ENGINE", "both").lower()
 SEARCH_RESULTS_PER_QUERY = int(os.environ.get("SEARCH_RESULTS_PER_QUERY", "8"))
 SEARCH_QUERIES_PER_HOST = int(os.environ.get("SEARCH_QUERIES_PER_HOST", "6"))
 SEARCH_TIMEOUT = int(os.environ.get("SEARCH_TIMEOUT", "12"))
+
+# Requêtes de secours pour les drops courts : elles sont lancées à chaque
+# cycle de découverte, en plus des requêtes génériques. Cela évite qu'un
+# produit mis en ligne puis retiré très vite passe entre deux mailles.
+PRIORITY_DISCOVERY_QUERIES = {
+    "king-jouet.com": (
+        'site:king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ "Pokémon 30 ans"',
+        'site:king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ "Pokémon 30 ans - Coffret"',
+        'site:king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ "Pokémon 30 ans" "Asmodée"',
+        'site:king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ "Coffret Amphinobi-ex"',
+        'site:king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ "Coffret Nymphali-ex"',
+        'site:king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ "Coffret poster" "30 ans"',
+        'site:king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ "Dresseur d Elite" "30 ans"',
+        'site:king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ "bundle" "30 ans" Pokémon',
+    )
+}
 
 AUTO_REFRESH_PRICES = os.environ.get("AUTO_REFRESH_PRICES", "1") != "0"
 PRICE_REFRESH_HOURS = float(os.environ.get("PRICE_REFRESH_HOURS", "12"))
@@ -269,43 +287,31 @@ def _decide(keys):
             return status, kinds
     return None, kinds
 
-def _retailer_from_url(url: str) -> str:
-    host = urlparse(url or "").netloc.lower().split(":")[0].lstrip("www.")
-    mapping = {
-        "fnac.com": "fnac", "carrefour.fr": "carrefour", "auchan.fr": "auchan",
-        "cultura.com": "cultura", "king-jouet.com": "kingjouet",
-        "smythstoys.com": "smythstoys", "joueclub.fr": "joueclub",
-        "lagranderecre.fr": "lagranderecre", "micromania.fr": "micromania",
-    }
-    return mapping.get(host, host)
+def _marketplace_signals(html: str):
+    low = normalize_text(html)
+    signals = (
+        "vendeur partenaire", "vendu par", "vendue par",
+        "vendu et livre par", "vendu et livre", "vendu et expedie par",
+        "offre partenaire", "marketplace", "autres offres", "plus d'offres",
+        "seller", "sold by", "fulfilled by",
+    )
+    return [x for x in signals if x in low]
 
-MARKETPLACE_TERMS = (
-    "vendeur partenaire", "vendeuse partenaire", "offre partenaire",
-    "vendu par", "vendue par", "vendu et livre par", "vendue et livree par",
-    "vendu et expedie par", "vendue et expediee par", "marketplace",
-    "autres offres", "plus d'offres", "plusieurs vendeurs",
-    "seller", "sold by", "third party", "third-party",
-)
+def _has_unknown_marketplace_offer(html: str, retailer: str | None):
+    # Ne bloque pas un site qui emploie simplement "vendeur" dans ses CGV.
+    # On cherche un bloc d'offre proche d'un prix/stock et un vendeur qui n'est
+    # pas clairement l'enseigne. Pour les pages marketplace, on préfère ne pas
+    # alerter plutôt que confondre le stock d'un tiers avec celui de l'enseigne.
+    low = normalize_text(html)
+    if not any(x in low for x in (
+        "vendeur partenaire", "vendu par", "vendue par", "offre partenaire",
+        "marketplace", "seller", "sold by", "fulfilled by"
+    )):
+        return False
 
-DIRECT_RETAILER_TERMS = (
-    "en stock en ligne", "disponible en ligne", "vendu par fnac", "vendu et livre par fnac",
-    "vendu et expedie par fnac", "vendu par carrefour", "vendu et livre par carrefour",
-    "vendu par auchan", "vendu et livre par auchan",
-    "vendu par cultura", "vendu et livre par cultura",
-    "vendu par king jouet", "vendu et livre par king jouet",
-    "vendu par smyths", "vendu et livre par smyths",
-    "vendu par joueclub", "vendu et livre par joueclub",
-    "vendu par la grande recre", "vendu par micromania",
-)
-
-def _official_offer_status(html: str, retailer: str = ""):
-    """Retourne le stock de l'offre officielle quand la page expose ses offres.
-
-    On ne mélange jamais une offre vendeur tiers avec l'offre de l'enseigne.
-    """
-    official = []
-    third_party = []
-    has_seller_offers = False
+    # Si du JSON-LD fournit des vendeurs, ils sont la source la plus fiable.
+    saw_offer_seller = False
+    saw_unknown_seller = False
     for data in _ld_nodes(html):
         for node in _walk(data):
             if not isinstance(node, dict):
@@ -318,99 +324,49 @@ def _official_offer_status(html: str, retailer: str = ""):
             for offer in offers:
                 if not isinstance(offer, dict):
                     continue
-                availability = offer.get("availability")
-                if not isinstance(availability, str):
-                    continue
                 seller = offer.get("seller")
-                seller_name = (seller.get("name") if isinstance(seller, dict) else
-                               seller if isinstance(seller, str) else "")
+                seller_name = seller.get("name") if isinstance(seller, dict) else seller if isinstance(seller, str) else None
                 if seller_name:
-                    has_seller_offers = True
-                    if _seller_matches_retailer(seller_name, retailer):
-                        official.append(_norm(availability))
-                    else:
-                        third_party.append(_norm(availability))
-                else:
-                    # Offre sans vendeur explicite : exploitable seulement si
-                    # la page n'est pas identifiée comme marketplace-only.
-                    official.append(_norm(availability))
-    status, _ = _decide(official)
-    if status:
-        return status
-    # Aucune offre officielle : surtout ne pas transformer l'offre
-    # d'un vendeur tiers en "stock enseigne". Le niveau marketplace sera
-    # déterminé séparément par _marketplace_only().
-    return None
-
-def _marketplace_only(html: str, retailer: str = "") -> bool:
-    if not html:
-        return False
-    low = normalize_text(html)
-    # Une offre officielle structurée a priorité sur les mentions marketplace.
-    structured_official = _official_offer_status(html, retailer)
-    if structured_official:
+                    saw_offer_seller = True
+                    if retailer and _seller_matches_retailer(seller_name, retailer):
+                        continue
+                    saw_unknown_seller = True
+    if saw_unknown_seller:
+        return True
+    if saw_offer_seller:
         return False
 
-    partner = any(x in low for x in MARKETPLACE_TERMS)
-    if not partner:
-        return False
+    # Sans vendeur structuré, la présence explicite d'une mention partenaire
+    # est suffisante pour considérer la page comme marketplace-only.
+    return any(x in low for x in ("vendeur partenaire", "offre partenaire", "marketplace"))
 
-    wanted = compact(retailer)
-    # Fnac expose très clairement la différence entre son stock et
-    # "En stock vendeur partenaire". C'est le cas qui nous a généré les faux positifs.
-    if wanted == "fnac":
-        direct_stock = any(x in low for x in (
-            "en stock en ligne", "disponible en ligne",
-            "vendu par fnac", "vendu et livre par fnac",
-            "vendu et expedie par fnac",
-        ))
-        partner_only = any(x in low for x in (
-            "en stock vendeur partenaire", "disponible vendeur partenaire",
-            "vendu par un vendeur partenaire", "offre partenaire",
-        ))
-        return partner_only and not direct_stock
-
-    # Pour les autres enseignes, on exige soit une offre officielle structurée,
-    # soit une mention explicite que l'enseigne vend elle-même.
-    direct_named = any(x in low for x in DIRECT_RETAILER_TERMS)
-    if direct_named:
-        return False
-
-    # Si la page contient un vendeur tiers mais aucune preuve de vendeur officiel,
-    # on ferme par défaut : pas de notification sur une offre ambiguë.
-    return True
-
-def classify(html: str, retailer: str = ""):
-    official_status = _official_offer_status(html, retailer)
-    if official_status:
-        return official_status, "official-offer"
-    if _marketplace_only(html, retailer):
-        return "out", "marketplace"
+def classify(html: str, retailer: str | None = None):
+    # Un produit marketplace ne doit jamais être déclaré en stock sur la base
+    # d'un InStock provenant d'une offre tierce.
+    marketplace = _has_unknown_marketplace_offer(html, retailer)
 
     status, _ = _decide(_ld_availability(html))
     if status:
-        return status, "schema"
+        return ("unknown", "marketplace") if marketplace else (status, "schema")
     status, _ = _decide(_next_data_availability(html))
     if status:
-        return status, "nextdata"
+        return ("unknown", "marketplace") if marketplace else (status, "nextdata")
     status, kinds = _decide([_norm(x) for x in SCHEMA_RE.findall(html)])
     if status:
-        return status, "schema" if len(kinds) <= 1 else "keywords"
+        return ("unknown", "marketplace") if marketplace else (status, "schema" if len(kinds) <= 1 else "keywords")
     og = [_norm(x) for rx in OG_RES for x in rx.findall(html)]
     status, _ = _decide(og)
     if status:
-        return status, "meta"
+        return ("unknown", "marketplace") if marketplace else (status, "meta")
 
     low = normalize_text(html)
     if any(word in low for word in OUT_WORDS):
         return "out", "keywords"
-
     has_in = any(word in low for word in IN_WORDS)
     if has_in and any(word in low for word in PRE_WORDS):
-        return "preorder", "keywords"
+        return ("unknown", "marketplace") if marketplace else ("preorder", "keywords")
     if has_in:
-        return "in", "keywords"
-
+        return ("unknown", "marketplace") if marketplace else ("in", "keywords")
     if any(word in low for word in BLOCK_WORDS):
         return "blocked", "keywords"
     return "unknown", "keywords"
@@ -418,19 +374,6 @@ def classify(html: str, retailer: str = ""):
 # ---------------------------------------------------------------------------
 # CANDIDATS PRODUITS
 # ---------------------------------------------------------------------------
-
-ENGLISH_TCG_MARKERS = (
-    "anglais", "english", "version anglaise", "version english",
-    "en anglais", "in english", "langue anglaise", "english version",
-    "booster anglais", "boosters anglais", "cartes anglaises",
-    "cartes en anglais", "cards in english", "english cards",
-)
-
-def _is_explicitly_english_tcg(title: str, url: str = "") -> bool:
-    # On regarde uniquement titre + URL : le footer d'un site français peut
-    # naturellement contenir "English" pour changer de langue.
-    hay = normalize_text(f"{title} {url}")
-    return _has_any(hay, ENGLISH_TCG_MARKERS)
 
 POKEMON_PRODUCT_TERMS = (
     # Signaux TCG forts
@@ -451,23 +394,14 @@ POKEMON_PRODUCT_TERMS = (
 # stricts afin qu'une catégorie générale Pokémon (351+ articles chez certaines
 # enseignes) ne transforme pas LEGO, peluches, figurines, etc. en candidats TCG.
 POKEMON_TCG_BLOCK_TERMS = (
-    "lego", "peluche", "figurine", "funko", "tonies", "tonie",
-    "lampe", "veilleuse", "montre", "reveil", "puzzle",
-    "toupie", "spinner", "megablocks", "mega bloks",
+    "lego", "peluche", "peluche", "figurine", "funko", "tonies", "tonie",
+    "lampe", "veilleuse", "montre", "reveil", "réveil", "puzzle",
+    "toupie", "spinner", "megablocks", "mega bloks", "mega bloks",
     "jeu de société", "jeu de societe", "cherche et trouve", "livre",
-    "roman", "manga", "sticker", "autocollant", "vetement",
-    "chaussette", "sac à dos", "sac a dos", "cartable", "trousse",
-    "cahier", "agenda", "stylo", "crayon", "gomme", "regle",
-    "fournitures scolaires", "papeterie", "gourde", "mug",
-    "ceinture de dresseur", "clip n' go", "clip n go",
+    "roman", "manga", "sticker", "autocollant", "vetement", "vêtement",
+    "chaussette", "sac à dos", "sac a dos", "gourde", "mug", "lampe",
+    "ceinture de dresseur", "clip n' go", "clip n go", "accessoire",
     "jouet à construire", "jouet a construire", "set de construction",
-    "chaussure", "casquette", "pyjama", "linge", "sac à main",
-)
-
-POKEMON_SCHOOL_TERMS = (
-    "cartable", "sac à dos", "sac a dos", "trousse", "cahier", "agenda",
-    "stylo", "crayon", "gomme", "regle", "règle", "fournitures scolaires",
-    "papeterie", "sacoche scolaire", "pochette scolaire", "emploi du temps",
 )
 
 # Termes qui prouvent beaucoup mieux qu'une fiche est bien du JCC Pokémon.
@@ -533,63 +467,52 @@ def _has_any(text: str, terms) -> bool:
 def is_relevant_pokemon_candidate(title: str, url: str = "", html: str = "") -> bool:
     title_url = normalize_text(f"{title} {url}")
     visible = _visible_product_text(html)
-    if _is_explicitly_english_tcg(title, url):
-        return False
-    if not _has_any(title_url, ("pokemon", "pokémon", "pokemon tcg", "pokémon tcg", "pokemon jcc", "pokémon jcc")):
+    product_title = normalize_text(title)
+
+    pokemon = _has_any(title_url, ("pokemon", "pokémon", "pokemon tcg", "pokémon tcg", "pokemon jcc", "pokémon jcc"))
+    if not pokemon:
         return False
 
-    # Sécurité principale : le TITRE/URL doit porter le produit TCG.
-    # Une mention "Pokémon TCG" dans les produits associés ou le footer ne suffit plus.
-    if _has_any(title_url, POKEMON_SCHOOL_TERMS):
-        return False
+    # Les exclusions portent sur le titre/URL du produit, jamais sur le footer.
     title_blocked = _has_any(title_url, POKEMON_TCG_BLOCK_TERMS)
     title_has_tcg = _has_any(title_url, POKEMON_PRODUCT_TERMS)
-    generic_storage = _has_any(title_url, ("portfolio", "classeur", "binder", "album", "range-cartes", "range cartes"))
-    explicit_card_context = _has_any(title_url, (
-        "cartes", "cards", "booster", "boosters", "pokemon tcg", "pokemon jcc",
-        "jeu de cartes", "cartes à collectionner", "cartes a collectionner",
+    title_has_card_signal = _has_any(product_title, (
+        "cartes", "cards", "jcc", "tcg", "booster", "boosters",
+        "coffret", "bundle", "pack", "display", "etb", "deck",
+        "blister", "tin", "portfolio", "classeur", "binder", "album",
     ))
 
     if title_blocked and not title_has_tcg:
         return False
 
-    if generic_storage:
-        # Un classeur/portfolio reste autorisé, mais uniquement s'il est
-        # explicitement lié aux cartes/boosters/JCC dans le titre.
-        return bool(explicit_card_context or _has_any(visible[:50000], (
-            "pokemon tcg", "pokémon tcg", "pokemon jcc", "pokémon jcc",
-            "cartes à collectionner", "cartes a collectionner", "booster",
-        )))
-
-    if title_has_tcg and not title_blocked:
+    # Règle principale : le produit doit lui-même annoncer un article TCG.
+    # On n'utilise plus le texte général de la page pour valider une fiche
+    # scolaire, une figurine ou un jouet simplement parce que le footer parle
+    # de boosters Pokémon.
+    if title_has_tcg or title_has_card_signal:
         return True
 
-    # Fiche sans terme produit clair : le contenu doit au minimum confirmer
-    # le JCC et ne pas ressembler à une fourniture scolaire/merchandising.
-    content_has_tcg = _has_any(visible[:50000], POKEMON_TCG_STRONG_TERMS)
-    return bool(content_has_tcg and explicit_card_context and not title_blocked)
+    # Exception contrôlée pour les pages 30 ans / Règne Delta : le titre peut
+    # être très court, mais la fiche doit contenir une description TCG forte
+    # dans son début, pas un footer ou une liste de produits associés.
+    lead = visible[:12000]
+    strong = _has_any(lead, POKEMON_TCG_STRONG_TERMS)
+    special = _has_any(title_url, DISCOVERY_WATCH_TERMS)
+    return bool(strong and special and not title_blocked)
 
 def is_relevant_onepiece_candidate(title: str, url: str = "", html: str = "") -> bool:
     title_url = normalize_text(f"{title} {url}")
     visible = _visible_product_text(html)
-    if _is_explicitly_english_tcg(title, url):
+    one_piece = _has_any(title_url, ("one piece", "onepiece", "one-piece"))
+    if not one_piece:
         return False
-    if not _has_any(title_url, ("one piece", "onepiece", "one-piece")):
-        return False
-    if _has_any(title_url, ONEPIECE_TCG_BLOCK_TERMS):
-        return False
-    # Français uniquement : on garde les références TCG, mais on ne valide pas
-    # un produit générique parce que la page contient simplement "One Piece".
+    blocked = _has_any(title_url, ONEPIECE_TCG_BLOCK_TERMS)
     title_has_tcg = _has_any(title_url, ONEPIECE_PRODUCT_TERMS)
-    title_card = _has_any(title_url, (
-        "one piece tcg", "one piece card game", "booster", "display", "deck",
-        "starter", "pack", "box", "op-17", "op-18", "op-19", "tin pack",
-    ))
-    content_card = _has_any(visible[:50000], (
-        "one piece card game", "one piece tcg", "booster", "display",
-        "starter deck", "deck", "op-17", "op-18", "op-19", "tin pack",
-    ))
-    return bool((title_has_tcg or title_card or content_card) and not _has_any(title_url, ONEPIECE_TCG_BLOCK_TERMS))
+    if blocked and not title_has_tcg:
+        return False
+    if title_has_tcg:
+        return True
+    return _has_any(visible[:12000], ("one piece card game", "one piece tcg")) and not blocked
 
 # ---------------------------------------------------------------------------
 # PRIX
@@ -798,10 +721,6 @@ def load_products():
             print(f"! ligne {line_no} ignorée: format attendu 'Nom | URL | prix_normal'")
             continue
         name, url = match.group(1).strip(), match.group(2).strip()
-        title_url = normalize_text(f"{name} {url}")
-        if _has_any(title_url, POKEMON_SCHOOL_TERMS) and _has_any(title_url, ("pokemon", "pokémon")):
-            print(f"! ligne {line_no} ignorée: article Pokémon hors TCG (fourniture scolaire).")
-            continue
         price = parse_price(match.group(3))
         if price is None:
             continue
@@ -971,15 +890,11 @@ def check_one(product):
               "physical_stores": [], "physical_checked_at": 0}
     try:
         html = fetch(product["url"])
-        retailer = _retailer_from_url(product["url"])
+        retailer = DISCOVERY_RETAILERS.get(urlparse(product["url"]).netloc.lower().lstrip("www."), (None,))[0]
         result["status"], result["source"] = classify(html, retailer)
         if PRICE_FILTER_ENABLED:
             result["price"] = extract_price(html)
-        if _marketplace_only(html, retailer):
-            result["marketplace_only"] = True
-            result["physical_status"] = None
-            result["physical_stores"] = []
-        elif PHYSICAL_STOCK_ENABLED:
+        if PHYSICAL_STOCK_ENABLED:
             result.update(physical_result(product, html))
     except FetchError as exc:
         result["error"] = str(exc)
@@ -1038,12 +953,6 @@ def process_result(state, result):
     entry["last_http_status"] = 200
     entry["status"] = result["status"]
     entry["last_price"] = result["price"]
-
-    if result.get("marketplace_only") or result.get("source") == "marketplace":
-        print(f"  -> offre vendeur tiers ignorée: {result['name']}")
-        entry["alerted"], entry["weak_hits"] = False, 0
-        schedule_next(entry, result, now)
-        return
 
     maybe_notify_physical(state, result)
 
@@ -1199,6 +1108,7 @@ CATALOG_SEEDS = {
         "https://www.cultura.com/cartes-a-jouer/cartes-pokemon.html?p=1",
     ],
     "king-jouet.com": [
+        "https://www.king-jouet.com/pokemon-30-ans-tcg.htm",
         "https://www.king-jouet.com/jeux-jouets-pokemon.htm",
         "https://www.king-jouet.com/jeux-jouets/tout-le-site-hors-livres-piles/pokemon/page1.htm",
     ],
@@ -1254,7 +1164,6 @@ def _catalog_links(html: str, base_url: str, domain: str):
 
 
 def _catalog_page_links(html: str, base_url: str, domain: str):
-    """Retourne les pages de pagination d'un catalogue sans dépendre d'un seul format d'URL."""
     links, seen = [], set()
     host = domain.lower().lstrip("www.")
     rx = re.compile(r'<a\b[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
@@ -1265,16 +1174,9 @@ def _catalog_page_links(html: str, base_url: str, domain: str):
         p = urlparse(url)
         if p.netloc.lower().split(":")[0].lstrip("www.") != host:
             continue
-        attrs = m.group(0)
         label = normalize_text(re.sub(r"<[^>]+>", " ", m.group(2)))
-        hay = normalize_text(f"{label} {attrs} {p.path} {p.query}")
-        is_pagination = (
-            any(x in hay for x in ("suivant", "precedent", "next", "previous", "pagination", "page suivante"))
-            or bool(re.search(r"(?:[?&](?:page|p|start|offset)=|/page[/_-]?\d+|/p[/_-]?\d+)", hay, re.I))
-            or bool(re.search(r"\b(?:page|p)\s*\d+\b", hay, re.I))
-            or bool(re.search(r"aria-label=[^>]*(?:page|next|suivant)", attrs, re.I))
-        )
-        if not is_pagination:
+        hay = f"{label} {p.path} {p.query}".lower()
+        if not any(x in hay for x in ("page=", "page/", "p=", "start=", "offset=", "suivant", "next")):
             continue
         key = url.rstrip("/")
         if key not in seen:
@@ -1287,14 +1189,12 @@ def _catalog_candidate_from_page(retailer, url, html):
     title = _product_title(html, url)
     if not (is_relevant_pokemon_candidate(title, url, html) or is_relevant_onepiece_candidate(title, url, html)):
         return None
-    if _marketplace_only(html, retailer):
-        if DISCOVERY_LOG_ALL_CANDIDATES:
-            print(f"    - rejet marketplace/vendeur tiers: {title[:100]}")
-        return None
     price = _reference_price_from_retailer(html, retailer)
     if price is None:
         return None
     status, source = classify(html, retailer)
+    if source == "marketplace":
+        return None
     score, reasons = _score_candidate(retailer, title, url, html)
     if score < 6:
         return None
@@ -1316,41 +1216,29 @@ def discover_via_catalogs(products):
         print(f"  📚 Catalogue direct: {retailer}")
         pages = []
         seen_pages = set()
-        # On charge toutes les seeds disponibles avant de parcourir la pagination.
-        # Ainsi, deux catégories officielles ne se bloquent plus mutuellement à cause
-        # d'un plafond global de pages.
         for seed in seeds:
             if len(pages) >= CATALOG_MAX_PAGES_PER_HOST:
                 break
-            key = seed.rstrip("/")
-            if key in seen_pages:
-                continue
             try:
                 html = _fetch_once(seed, DISCOVERY_TIMEOUT)
-                pages.append((seed, html)); seen_pages.add(key)
+                pages.append((seed, html)); seen_pages.add(seed.rstrip("/"))
             except Exception as exc:
                 if DISCOVERY_LOG_ALL_CANDIDATES:
                     print(f"    ! catalogue inaccessible {seed}: {exc}")
-
-        # Parcours limité mais progressif de la pagination. On collecte d'abord
-        # les liens trouvés sur les pages déjà chargées, puis on continue jusqu'au
-        # plafond. Cela évite de dépendre des seules 1re/2e pages.
-        cursor = 0
-        while cursor < len(pages) and len(pages) < CATALOG_MAX_PAGES_PER_HOST:
-            page_url, html = pages[cursor]
-            cursor += 1
-            for nxt in _catalog_page_links(html, page_url, domain):
-                if len(pages) >= CATALOG_MAX_PAGES_PER_HOST:
-                    break
-                key = nxt.rstrip("/")
-                if key in seen_pages:
-                    continue
-                try:
-                    nxt_html = _fetch_once(nxt, DISCOVERY_TIMEOUT)
-                    pages.append((nxt, nxt_html)); seen_pages.add(key)
-                except Exception as exc:
-                    if DISCOVERY_LOG_ALL_CANDIDATES:
-                        print(f"    ! page catalogue inaccessible {nxt}: {exc}")
+        # Une page suivante éventuelle, sans crawler toute la pagination.
+        if len(pages) < CATALOG_MAX_PAGES_PER_HOST:
+            for seed, html in list(pages):
+                for nxt in _catalog_page_links(html, seed, domain):
+                    if len(pages) >= CATALOG_MAX_PAGES_PER_HOST:
+                        break
+                    key = nxt.rstrip("/")
+                    if key in seen_pages:
+                        continue
+                    try:
+                        nxt_html = _fetch_once(nxt, DISCOVERY_TIMEOUT)
+                        pages.append((nxt, nxt_html)); seen_pages.add(key)
+                    except Exception:
+                        continue
         candidates = {}
         for page_url, html in pages:
             for score, anchor, url in _catalog_links(html, page_url, domain):
@@ -1410,7 +1298,8 @@ def _seller_matches_retailer(seller, retailer):
         "joueclub": {"joueclub", "joueclubfr"}, "lagranderecre": {"lagranderecre", "lagranderecrefr"},
         "micromania": {"micromania", "micromaniafr"},
     }
-    return low == wanted or low in aliases.get(wanted, {wanted})
+    allowed = aliases.get(wanted, {wanted})
+    return low == wanted or low in allowed or any(alias in low for alias in allowed)
 
 def _official_retailer_prices(html, retailer):
     prices, structured_offers = [], False
@@ -1441,8 +1330,6 @@ def _official_retailer_prices(html, retailer):
     if prices:
         return prices
     if structured_offers:
-        return []
-    if _marketplace_only(html, retailer):
         return []
     p = extract_price(html)
     return [p] if p is not None else []
@@ -1655,9 +1542,9 @@ def discover_via_search_engines(products):
         if per_host[domain] >= DISCOVERY_MAX_PER_HOST:
             continue
 
-        queries = _discovery_queries(domain)
-        # V15 : le nombre demandé est maintenant réellement respecté.
-        queries = queries[:max(1, SEARCH_QUERIES_PER_HOST)]
+        queries = list(PRIORITY_DISCOVERY_QUERIES.get(domain, ())) + _discovery_queries(domain)
+        # Les requêtes prioritaires passent avant les génériques.
+        queries = list(dict.fromkeys(queries))[:max(1, SEARCH_QUERIES_PER_HOST + len(PRIORITY_DISCOVERY_QUERIES.get(domain, ())))]
 
         for query in queries:
             if per_host[domain] >= DISCOVERY_MAX_PER_HOST:
@@ -1693,11 +1580,6 @@ def discover_via_search_engines(products):
                         print(f"    - rejet: {title[:100]}")
                     continue
 
-                if _marketplace_only(html, retailer):
-                    if DISCOVERY_LOG_ALL_CANDIDATES:
-                        print(f"    - rejet marketplace/vendeur tiers: {title[:100]}")
-                    continue
-
                 reference_price = _reference_price_from_retailer(html, retailer)
                 if reference_price is None:
                     if DISCOVERY_LOG_ALL_CANDIDATES:
@@ -1705,6 +1587,10 @@ def discover_via_search_engines(products):
                     continue
 
                 status, source = classify(html, retailer)
+                if source == "marketplace":
+                    if DISCOVERY_LOG_ALL_CANDIDATES:
+                        print(f"    - rejet marketplace: {title[:100]}")
+                    continue
                 score, reasons = _score_candidate(retailer, title, clean, html)
 
                 # Protection contre les pages catégorie qui contiennent beaucoup
@@ -1736,8 +1622,16 @@ def discover_via_search_engines(products):
         print("  ℹ️ aucune nouvelle fiche produit découverte.")
         return []
 
-    # La persistance est faite par discover_new_products(), quelle que soit
-    # l'origine de la découverte (catalogue direct ou Google/Bing).
+    # Journal séparé : contrairement à V14, il est réellement écrit.
+    logged = _append_discovery_log(discovered)
+    print(f"  📝 {logged} découverte(s) journalisée(s) dans discovered_products.txt")
+
+    added = _append_products_txt(discovered)
+    if not AUTO_ADD_DISCOVERED:
+        print("  ℹ️ AUTO_ADD_DISCOVERED=0 : produits détectés mais non ajoutés à products.txt")
+    elif not added:
+        print("  ℹ️ aucune nouvelle URL à ajouter à products.txt")
+
     return discovered
 
 def activate_new_discoveries(state, products, discovered):
@@ -1763,7 +1657,7 @@ def activate_new_discoveries(state, products, discovered):
     return products
 
 def discover_new_products(products, run_catalog=True):
-    """Découverte hybride V18 : catalogue direct multi-pages + Google/Bing."""
+    """Découverte hybride V16 : catalogue direct + Google/Bing."""
     discovered = []
     if run_catalog:
         discovered.extend(discover_via_catalogs(products))
@@ -1773,18 +1667,6 @@ def discover_new_products(products, run_catalog=True):
         key = item.get("url", "").rstrip("/")
         if key and key not in seen:
             seen.add(key); unique.append(item)
-
-    # Une seule sortie de persistance pour toutes les sources. Une fiche trouvée
-    # par le catalogue est donc traitée exactement comme une fiche trouvée par
-    # Google/Bing et ne dépend plus de SEARCH_DISCOVERY_ENABLED.
-    if unique:
-        logged = _append_discovery_log(unique)
-        print(f"  📝 {logged} découverte(s) journalisée(s) dans discovered_products.txt")
-        added = _append_products_txt(unique)
-        if not AUTO_ADD_DISCOVERED:
-            print("  ℹ️ AUTO_ADD_DISCOVERED=0 : produits détectés mais non ajoutés à products.txt")
-        elif not added:
-            print("  ℹ️ aucune nouvelle URL à ajouter à products.txt")
     return unique
 
 # ---------------------------------------------------------------------------
@@ -1978,8 +1860,8 @@ def main():
         print("Mode rapide terminé.")
         return
 
-    print(f"Bot V17 lancé — filtre prix +{PRICE_TOLERANCE_PCT:g}% | {len(products)} produits.")
-    print("Découverte: catalogues directs + Google/Bing | TCG strict | vendeurs tiers exclus.")
+    print(f"Bot V16 lancé — filtre prix +{PRICE_TOLERANCE_PCT:g}% | {len(products)} produits.")
+    print("Découverte: catalogues directs + Google/Bing | classeur/portfolio/binder activés.")
     print("Ctrl+C pour arrêter.")
 
     try:
