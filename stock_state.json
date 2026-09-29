@@ -451,7 +451,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790675253.2200024,
+      "problem_since": 0,
       "status": "out",
       "url": "https://www.carrefour.fr/p/cartes-a-jouer-et-a-collectionner-coffret-dresseur-d-elite-30e-anniversaire-pokemon-0196214144835",
       "weak_hits": 0
@@ -494,7 +494,7 @@
     },
     "https://www.carrefour.fr/p/coffret-pokemon-poster-30e-anniversaire-pokemon-0196214146006": {
       "alerted": false,
-      "cooldown_until": 1790675553.2200181,
+      "cooldown_until": 1790676386.065223,
       "errors": 8,
       "last_http_status": null,
       "last_price": null,
@@ -512,7 +512,7 @@
     },
     "https://www.carrefour.fr/p/double-pack-one-piece-op17-les-guerriers-les-plus-puissants-au-monde-4582770058741": {
       "alerted": false,
-      "cooldown_until": 1790672927.4420078,
+      "cooldown_until": 1790676386.0652263,
       "errors": 8,
       "last_http_status": null,
       "last_price": null,
