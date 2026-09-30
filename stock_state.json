@@ -908,7 +908,7 @@
     },
     "https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034909-pokemon-30-ans-pack-de-2-boosters.htm": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790759105.58406,
       "errors": 0,
       "last_http_status": 200,
       "last_price": null,
@@ -919,7 +919,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790758805.58406,
       "status": "out",
       "url": "https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034909-pokemon-30-ans-pack-de-2-boosters.htm",
       "weak_hits": 0
@@ -944,7 +944,7 @@
     },
     "https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034913-pokemon-30-ans-coffret-amphinobi-ex.htm": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790759105.58403,
       "errors": 0,
       "last_http_status": 200,
       "last_price": null,
@@ -955,7 +955,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790758805.58403,
       "status": "out",
       "url": "https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034913-pokemon-30-ans-coffret-amphinobi-ex.htm",
       "weak_hits": 0
@@ -980,7 +980,7 @@
     },
     "https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034916-pokemon-30-ans-coffret-dresseur-d-elite.htm": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790759105.5840237,
       "errors": 0,
       "last_http_status": 200,
       "last_price": null,
@@ -991,7 +991,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790758805.5840237,
       "status": "out",
       "url": "https://www.king-jouet.com/jeu-jouet/jeux-societes/cartes-a-collectionner/ref-1034916-pokemon-30-ans-coffret-dresseur-d-elite.htm",
       "weak_hits": 0
@@ -1070,7 +1070,7 @@
     },
     "https://www.king-jouet.com/jeux-jouets/nouveautes/marque-asmodee/Pokemon/page1.htm": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790759105.5840669,
       "errors": 0,
       "last_http_status": 200,
       "last_price": 50.0,
@@ -1081,7 +1081,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790758805.5840669,
       "status": "unknown",
       "url": "https://www.king-jouet.com/jeux-jouets/nouveautes/marque-asmodee/Pokemon/page1.htm",
       "weak_hits": 0
