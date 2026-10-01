@@ -487,7 +487,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790868429.2469616,
+      "problem_since": 0,
       "status": "out",
       "url": "https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102",
       "weak_hits": 0
@@ -1027,7 +1027,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1790877516.561858,
+      "problem_since": 0,
       "status": "unknown",
       "url": "https://www.king-jouet.com/jeux-jouets/Pokemon/page1.htm",
       "weak_hits": 0
