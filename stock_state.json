@@ -476,7 +476,7 @@
     },
     "https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1790986097.5361881,
       "errors": 0,
       "last_http_status": 200,
       "last_price": 27.99,
@@ -487,14 +487,14 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 0,
+      "problem_since": 1790985797.5361881,
       "status": "out",
       "url": "https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102",
       "weak_hits": 0
     },
     "https://www.carrefour.fr/p/coffret-pokemon-poster-30e-anniversaire-pokemon-0196214146006": {
       "alerted": false,
-      "cooldown_until": 1790982702.5392485,
+      "cooldown_until": 1790986097.5361907,
       "errors": 8,
       "last_http_status": null,
       "last_price": null,
