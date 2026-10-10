@@ -471,10 +471,10 @@
       "problem_alerted": false,
       "problem_since": 1791648695.7593591,
       "status": "out",
-      "url": "https://www.carrefour.fr/p/coffret-pokemon-amphinobi-ex-30e-anniversaire-pokemon-0196214147164",
+      "url": "https://www.carrefour.fr/p/cartes-a-jouer-et-a-collectionner-coffret-dresseur-d-elite-30e-anniversaire-pokemon-0196214144835",
       "weak_hits": 0
     },
-    "https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102": {
+    "https://www.carrefour.fr/p/coffret-pokemon-amphinobi-ex-30e-anniversaire-pokemon-0196214147164": {
       "alerted": false,
       "cooldown_until": 1791648995.7593625,
       "errors": 0,
@@ -487,7 +487,25 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1791643178.691125,
+      "problem_since": 1791648075.9409645,
+      "status": "out",
+      "url": "https://www.carrefour.fr/p/coffret-pokemon-amphinobi-ex-30e-anniversaire-pokemon-0196214147164",
+      "weak_hits": 0
+    },
+    "https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102": {
+      "alerted": false,
+      "cooldown_until": 0,
+      "errors": 0,
+      "last_http_status": 200,
+      "last_price": 27.99,
+      "name": "Carrefour - Coffret Nymphali ex 30 ans",
+      "next_check": 1791648090.9409678,
+      "physical_checked_at": 0,
+      "physical_last_alert": 0,
+      "physical_status": null,
+      "physical_stores": [],
+      "problem_alerted": false,
+      "problem_since": 0,
       "status": "out",
       "url": "https://www.carrefour.fr/p/coffret-pokemon-nymphali-ex-30e-anniversaire-pokemon-0196214147102",
       "weak_hits": 0
