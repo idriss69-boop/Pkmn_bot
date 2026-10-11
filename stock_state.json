@@ -440,7 +440,7 @@
     },
     "https://www.carrefour.fr/p/cartes-a-jouer-et-a-collectionner-coffret-dresseur-d-elite-30e-anniversaire-pokemon-0196214144835": {
       "alerted": false,
-      "cooldown_until": 0,
+      "cooldown_until": 1791738458.761672,
       "errors": 0,
       "last_http_status": 200,
       "last_price": 64.99,
