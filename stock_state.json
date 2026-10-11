@@ -767,7 +767,7 @@
       "cooldown_until": 1791756995.0981462,
       "errors": 0,
       "last_http_status": 200,
-      "last_price": 23.02,
+      "last_price": 23.34,
       "name": "Fnac - Pokébox Pokémon - Jeux de récré, cartes à collectionner | fnac",
       "next_check": 1791756995.0981462,
       "physical_checked_at": 0,
@@ -775,7 +775,7 @@
       "physical_status": null,
       "physical_stores": [],
       "problem_alerted": false,
-      "problem_since": 1791673664.2308774,
+      "problem_since": 0,
       "status": "out",
       "url": "https://www.fnac.com/n554020/Jeux-de-recre-cartes-a-collectionner/Pokebox-Pokemon",
       "weak_hits": 0
